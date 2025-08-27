@@ -23,19 +23,7 @@ from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 # ==================== CONFIGURACIÓN ====================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 AUTHORIZED_USER_ID = int(os.getenv("AUTHORIZED_USER_ID"))
-
 bot = telebot.TeleBot(BOT_TOKEN)
-
-# Mini webserver para Render
-app = Flask(__name__)
-
-@app.route('/')
-def home():
-    return "🤖 Bot de Finanzas corriendo en Render 🚀"
-
-def run_bot():
-    print("🚀 Iniciando bot de Telegram...")
-    bot.infinity_polling()
 
 # Configuración de logging
 logging.basicConfig(
@@ -1902,9 +1890,31 @@ def main():
         logger.error(f"❌ Error fatal en el bot: {e}")
         print(f"❌ Error fatal: {e}")
 
+# Hilo para el polling del bot
+def run_bot():
+    print("🤖 Iniciando bot de Telegram...")
+    bot.infinity_polling(timeout=90, skip_pending=True)
+
+# Hilo del scheduler
+def run_scheduler():
+    while True:
+        schedule.run_pending()
+        time.sleep(1)
+
+# Mini servidor Flask para Render
+app = Flask(__name__)
+
+@app.route("/")
+def home():
+    return "🤖 Bot de Finanzas corriendo en Render 🚀"
+
 if __name__ == "__main__":
     main()
-    # Correr bot en segundo plano
-    threading.Thread(target=run_bot).start()
-    # Correr Flask en el puerto que Render espera
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+    # Lanzar bot y scheduler en segundo plano
+    threading.Thread(target=run_bot, daemon=True).start()
+    threading.Thread(target=run_scheduler, daemon=True).start()
+
+    # Mantener proceso vivo abriendo el puerto
+    port = int(os.getenv("PORT", "5000"))
+    print(f"🌐 Flask escuchando en 0.0.0.0:{port}")
+    app.run(host="0.0.0.0", port=port)
