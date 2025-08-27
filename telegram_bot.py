@@ -16,12 +16,26 @@ from datetime import datetime, date
 from typing import Dict, List, Tuple
 import os
 from dataclasses import dataclass
+from flask import Flask
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 # ==================== CONFIGURACIÓN ====================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 AUTHORIZED_USER_ID = int(os.getenv("AUTHORIZED_USER_ID"))
+
+bot = telebot.TeleBot(BOT_TOKEN)
+
+# Mini webserver para Render
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "🤖 Bot de Finanzas corriendo en Render 🚀"
+
+def run_bot():
+    print("🚀 Iniciando bot de Telegram...")
+    bot.infinity_polling()
 
 # Configuración de logging
 logging.basicConfig(
@@ -1890,3 +1904,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+    # Correr bot en segundo plano
+    threading.Thread(target=run_bot).start()
+    # Correr Flask en el puerto que Render espera
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
