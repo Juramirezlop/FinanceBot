@@ -1909,12 +1909,16 @@ def home():
     return "🤖 Bot de Finanzas corriendo en Render 🚀"
 
 if __name__ == "__main__":
-    main()
-    # Lanzar bot y scheduler en segundo plano
-    threading.Thread(target=run_bot, daemon=True).start()
-    threading.Thread(target=run_scheduler, daemon=True).start()
+    # Crear instancia del bot
+    finance_bot = FinanceBot(BOT_TOKEN, AUTHORIZED_USER_ID)
 
-    # Mantener proceso vivo abriendo el puerto
+    # Scheduler en thread
+    scheduler = TaskScheduler(finance_bot, finance_bot.db)
+    threading.Thread(target=scheduler.run_scheduler, daemon=True).start()
+
+    # Bot en thread
+    threading.Thread(target=lambda: finance_bot.bot.infinity_polling(timeout=90, skip_pending=True), daemon=True).start()
+
+    # Mantener proceso vivo con Flask
     port = int(os.getenv("PORT", "5000"))
-    print(f"🌐 Flask escuchando en 0.0.0.0:{port}")
     app.run(host="0.0.0.0", port=port)
