@@ -1846,12 +1846,12 @@ def main():
     """Función principal para iniciar el bot"""
     
     # Verificar configuración
-    if BOT_TOKEN == "7576416663:AAGh2Jd8w_gP452bfbhxgn_oP2zeysIeeVA":
+    if not BOT_TOKEN:
         logger.error("❌ Debes configurar tu BOT_TOKEN real")
         print("❌ Error: Configura tu BOT_TOKEN en la variable BOT_TOKEN")
         return
     
-    if AUTHORIZED_USER_ID == 6913301172:
+    if not AUTHORIZED_USER_ID:
         logger.error("❌ Debes configurar tu USER_ID real")
         print("❌ Error: Configura tu USER_ID en la variable AUTHORIZED_USER_ID")
         print("💡 Para obtener tu USER_ID, envía un mensaje a @userinfobot")
