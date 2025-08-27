@@ -11,6 +11,7 @@ import logging
 import schedule
 import time
 import threading
+import csv
 from datetime import datetime, date
 from typing import Dict, List, Tuple
 import os
@@ -1749,22 +1750,34 @@ class TaskScheduler:
             logger.error(f"Error verificando recordatorios: {e}")
     
     def realizar_backup(self):
-        """Realiza backup automático de la base de datos"""
         try:
             fecha = datetime.now().strftime("%Y%m%d_%H%M%S")
-            backup_path = f"backup_finanzas_{fecha}.db"
-            
-            # Copiar base de datos
-            import shutil
-            shutil.copy2(self.db.db_path, backup_path)
-            
-            logger.info(f"Backup realizado: {backup_path}")
-            
-            # Mantener solo los últimos 7 backups
-            self.limpiar_backups_antiguos()
-            
+            backup_path = f"backup_finanzas_{fecha}.csv"
+
+            # Exportar movimientos a CSV
+            with self.db.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('SELECT * FROM movimientos WHERE user_id = ?', (self.bot.authorized_user,))
+                rows = cursor.fetchall()
+
+                if rows:
+                    with open(backup_path, "w", newline="", encoding="utf-8") as f:
+                        writer = csv.writer(f)
+                        # Cabeceras
+                        writer.writerow(rows[0].keys())
+                        # Datos
+                        for row in rows:
+                            writer.writerow(list(row))
+                
+                    # Enviar CSV al usuario
+                    with open(backup_path, "rb") as f:
+                        self.bot.bot.send_document(self.bot.authorized_user, f)
+                    
+                    logger.info(f"Backup CSV generado y enviado: {backup_path}")
+                else:
+                    self.bot.bot.send_message(self.bot.authorized_user, "🔔 No hay movimientos para respaldar todavía.")
         except Exception as e:
-            logger.error(f"Error realizando backup: {e}")
+            logger.error(f"Error realizando backup CSV: {e}")
     
     def limpiar_backups_antiguos(self):
         """Elimina backups antiguos, manteniendo solo los últimos 7"""
