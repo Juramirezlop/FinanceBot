@@ -1678,7 +1678,8 @@ class TaskScheduler:
         schedule.every().day.at("02:00").do(self.realizar_backup)
         
         # Resumen mensual el día 1 a las 9 AM
-        schedule.every().month.do(self.generar_resumen_mensual)
+        schedule.every().day.at("08:00").do(self.generar_resumen_mensual)
+
     
     def verificar_suscripciones(self):
         """Verifica y procesa suscripciones pendientes"""
@@ -1795,16 +1796,21 @@ class TaskScheduler:
             logger.error(f"Error limpiando backups antiguos: {e}")
     
     def generar_resumen_mensual(self):
-        """Genera y envía resumen mensual automático"""
+        """Genera y envía resumen mensual automático (solo día 1)"""
         try:
+            hoy = date.today()
+            if hoy.day != 1:
+                # No es primer día del mes → salir
+                return  
+
             # Obtener todos los usuarios activos
             with self.db.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('SELECT user_id FROM usuarios WHERE configurado = 1')
                 usuarios = cursor.fetchall()
             
-            mes_anterior = date.today().month - 1 if date.today().month > 1 else 12
-            año = date.today().year if date.today().month > 1 else date.today().year - 1
+            mes_anterior = hoy.month - 1 if hoy.month > 1 else 12
+            año = hoy.year if hoy.month > 1 else hoy.year - 1
             
             for (user_id,) in usuarios:
                 try:
@@ -1829,7 +1835,7 @@ class TaskScheduler:
                     
         except Exception as e:
             logger.error(f"Error generando resúmenes mensuales: {e}")
-    
+        
     def run_scheduler(self):
         """Ejecuta el programador de tareas en un hilo separado"""
         while True:
