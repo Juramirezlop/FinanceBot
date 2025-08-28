@@ -793,7 +793,8 @@ class CallbackHandlers:
                     f"🔔 Recordatorios: {stats.get('recordatorios', 0)}\n"
                     f"💳 Deudas: {stats.get('deudas', 0)}\n"
                     f"🚨 Alertas: {stats.get('alertas', 0)}\n"
-                    f"📂 Categorías: {stats.get('categorias', 0)}"
+                    f"📂 Categorías: {stats.get('categorias', 0)}\n\n"
+                    f"💡 **Tip:** Usa `/backup` para exportar tus datos"
                 )
                 
                 self.bot.edit_message_text(
@@ -811,17 +812,6 @@ class CallbackHandlers:
                     call.message.message_id,
                     reply_markup=self.markup_builder.create_back_to_menu_markup()
                 )
-        
-        elif data == "config_exportar":
-            self.bot.edit_message_text(
-                "📄 **Exportar Datos**\n\n"
-                "Los backups automáticos se envían diariamente.\n"
-                "Puedes solicitar un backup manual escribiendo /backup",
-                call.message.chat.id,
-                call.message.message_id,
-                parse_mode="Markdown",
-                reply_markup=self.markup_builder.create_back_to_menu_markup()
-            )
     
     # ==================== MÉTODOS AUXILIARES ====================
     
