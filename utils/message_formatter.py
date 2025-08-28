@@ -21,11 +21,18 @@ class MessageFormatter:
         )
     
     def format_menu_principal(self, balance_diario: dict, resumen: dict) -> str:
-        """Formatea el mensaje del menú principal con balance diario"""
+        """Formatea el mensaje del menú principal con balance diario REAL"""
+        # Mostrar solo los movimientos del DÍA, no el balance total
+        balance_dia = balance_diario['ingresos_hoy'] - balance_diario['gastos_hoy'] - balance_diario['ahorros_hoy']
+        
         return (
             f"{BotConstants.MONEY} **Mi Centro Financiero Personal**\n\n"
-            f"{self.format_daily_balance(balance_diario)}\n\n"
-            f"{BotConstants.CHART} Este Mes:\n"
+            f"📅 **Hoy ({date.today().strftime('%d/%m/%Y')}):**\n"
+            f"   {BotConstants.INCOME} Ingresos: ${balance_diario['ingresos_hoy']:,.2f}\n"
+            f"   {BotConstants.EXPENSE} Gastos: ${balance_diario['gastos_hoy']:,.2f}\n"
+            f"   💳 Ahorros: ${balance_diario['ahorros_hoy']:,.2f}\n"
+            f"   📊 Balance del día: ${balance_dia:,.2f}\n\n"
+            f"{BotConstants.CHART} **Este Mes:**\n"
             f"   {BotConstants.INCOME} Ingresos: ${resumen['ingresos']:,.2f}\n"
             f"   {BotConstants.EXPENSE} Gastos: ${resumen['gastos']:,.2f}\n"
             f"   💳 Ahorros: ${resumen['ahorros']:,.2f}\n\n"
