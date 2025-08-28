@@ -312,12 +312,11 @@ class MarkupBuilder:
     
     @staticmethod
     def create_config_menu_markup() -> InlineKeyboardMarkup:
-        """Crea markup para el menú de configuración mejorado"""
+        """Crea markup para el menú de configuración mejorado SIN exportar datos"""
         markup = InlineKeyboardMarkup(row_width=1)
         markup.add(
             InlineKeyboardButton("💰 Cambiar Balance Inicial", callback_data="config_balance_inicial"),
             InlineKeyboardButton("📊 Estadísticas del Bot", callback_data="config_estadisticas"),
-            InlineKeyboardButton("📄 Exportar Datos", callback_data="config_exportar"),
             InlineKeyboardButton(f"{BotConstants.HOME} Menú Principal", callback_data="back_to_menu")
         )
         return markup
