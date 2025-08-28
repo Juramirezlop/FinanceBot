@@ -1,3 +1,5 @@
-pyTelegramBotAPI==4.*
-schedule==1.2.*
-Flask==3.*
+pyTelegramBotAPI==4.15.8
+Flask==3.0.0
+schedule==1.2.1
+psutil==5.9.8
+Werkzeug==3.0.1
