@@ -108,19 +108,20 @@ class BotConstants:
     WARNING = "⚠️"
     INFO = "💡"
     BACK = "◀️"
+    DEBT_POSITIVE = "📈"  # Te deben
+    DEBT_NEGATIVE = "📉"  # Tú debes
+    ALERT = "🚨"
+    SUBSCRIPTION = "🔄"
+    REMINDER = "🔔"
     
     # Tipos de movimientos
     MOVEMENT_TYPES = ["ingreso", "gasto", "ahorro"]
     
-    # Categorías predeterminadas
-    DEFAULT_INCOME_CATEGORIES = [
-        "Salario", "Freelance", "Negocio", "Inversiones", "Otros"
-    ]
+    # Tipos de deuda
+    DEBT_TYPES = ["positiva", "negativa"]  # positiva = te deben, negativa = tú debes
     
-    DEFAULT_EXPENSE_CATEGORIES = [
-        "Vivienda", "Comida", "Transporte", "Ropa", "Salud", 
-        "Entretenimiento", "Educación", "Servicios"
-    ]
+    # Tipos de alerta
+    ALERT_TYPES = ["diario", "mensual"]
     
     # Límites del sistema
     MAX_AMOUNT = 999999999.99
@@ -128,6 +129,7 @@ class BotConstants:
     MAX_DESCRIPTION_LENGTH = 500
     MAX_CATEGORY_NAME_LENGTH = 50
     MAX_SUBSCRIPTION_NAME_LENGTH = 100
+    MAX_DEBT_NAME_LENGTH = 100
     
     # Mensajes de estado
     STATUS_MESSAGES = {
@@ -138,3 +140,6 @@ class BotConstants:
         "invalid_input": "❌ Entrada inválida",
         "not_found": "❌ No encontrado"
     }
+    
+    # Mensajes para omitir descripción
+    SKIP_DESCRIPTION_KEYWORDS = ["no", "n", "skip", "omitir", "sin descripcion"]
