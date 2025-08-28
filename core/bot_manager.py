@@ -275,3 +275,64 @@ class BotManager:
             return True  # Continuar funcionando
         
         self.bot.exception_handler = exception_handler
+
+    """
+    Mejora al bot_manager para manejar error 409 (conflicto de instancias)
+    """
+    
+    def start_polling(self):
+        """Inicia el polling del bot con manejo de conflictos"""
+        if not self.bot:
+            raise RuntimeError("Bot no inicializado")
+        
+        try:
+            self.is_running = True
+            
+            # Iniciar servidor Flask para Render
+            self.start_flask_server()
+            
+            # Intentar polling con reintentos para error 409
+            max_retries = 5
+            retry_delay = 30  # 30 segundos entre reintentos
+            
+            for attempt in range(max_retries):
+                try:
+                    logger.info(f"Iniciando polling (intento {attempt + 1}/{max_retries})")
+                    
+                    # Iniciar polling
+                    self.bot.infinity_polling(
+                        timeout=90,
+                        skip_pending=True,
+                        none_stop=True,
+                        allowed_updates=["message", "callback_query"]
+                    )
+                    break  # Si llegamos aquí, el polling fue exitoso
+                    
+                except Exception as e:
+                    error_msg = str(e).lower()
+                    
+                    if "409" in error_msg or "conflict" in error_msg:
+                        if attempt < max_retries - 1:
+                            logger.warning(f"Error 409 detectado. Esperando {retry_delay} segundos antes del reintento {attempt + 2}")
+                            print(f"⚠️  Detectada otra instancia del bot. Esperando {retry_delay} segundos...")
+                            
+                            import time
+                            time.sleep(retry_delay)
+                            retry_delay += 10  # Incrementar delay en cada intento
+                            continue
+                        else:
+                            logger.error("Máximo número de reintentos alcanzado para error 409")
+                            raise e
+                    else:
+                        # Otros errores, no reintentar
+                        raise e
+            
+        except KeyboardInterrupt:
+            logger.info("🛑 Bot detenido por el usuario")
+            print("\n🛑 Bot detenido correctamente")
+            self.shutdown()
+        except Exception as e:
+            logger.error(f"❌ Error fatal en el bot: {e}")
+            print(f"❌ Error fatal: {e}")
+            self.shutdown()
+            raise
