@@ -1,5 +1,5 @@
 """
-Handlers de comandos del bot optimizados para mejor rendimiento y estabilidad
+Handlers de comandos del bot optimizados y simplificados
 """
 
 import logging
@@ -25,7 +25,7 @@ class CommandHandlers:
     
     @handle_errors
     def handle_start(self, message):
-        """Comando /start - Punto de entrada principal optimizado"""
+        """Comando /start - Punto de entrada principal simplificado"""
         user_id = message.from_user.id
         
         # Verificar autorización
@@ -37,11 +37,11 @@ class CommandHandlers:
             # Limpiar estado previo del usuario
             self.bot_manager.clear_user_state(user_id)
             
-            # Verificar si es usuario nuevo o no configurado
+            # Verificar si es usuario nuevo
             if not self.db.usuario_existe(user_id):
-                self._iniciar_wizard_configuracion(message)
+                self._iniciar_configuracion_simple(message)
             elif not self.db.usuario_configurado(user_id):
-                self._continuar_wizard_configuracion(message)
+                self._continuar_configuracion_simple(message)
             else:
                 self._mostrar_menu_principal(message)
                 
@@ -54,7 +54,7 @@ class CommandHandlers:
     
     @handle_errors
     def handle_balance(self, message):
-        """Comando /balance - Muestra balance rápido"""
+        """Comando /balance - Muestra balance completo"""
         user_id = message.from_user.id
         
         if not self.bot_manager.is_authorized(user_id):
@@ -176,14 +176,86 @@ class CommandHandlers:
         except Exception as e:
             self.bot.reply_to(message, f"❌ Error reiniciando: {e}")
     
+    @handle_errors
+    def handle_backup(self, message):
+        """Comando /backup - Genera backup manual (NUEVO)"""
+        user_id = message.from_user.id
+        
+        if not self.bot_manager.is_authorized(user_id):
+            return
+        
+        try:
+            import csv
+            import tempfile
+            import os
+            from datetime import datetime
+            
+            # Crear archivo temporal
+            with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.csv', encoding='utf-8') as f:
+                backup_path = f.name
+                
+                # Obtener datos de movimientos
+                with self.db.pool.get_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute('''
+                        SELECT fecha, tipo, categoria, monto, descripcion, mes, año
+                        FROM movimientos 
+                        WHERE user_id = ?
+                        ORDER BY fecha DESC
+                    ''', (user_id,))
+                    
+                    rows = cursor.fetchall()
+                    
+                    if rows:
+                        writer = csv.writer(f)
+                        # Escribir cabeceras
+                        writer.writerow(['Fecha', 'Tipo', 'Categoria', 'Monto', 'Descripcion', 'Mes', 'Año'])
+                        # Escribir datos
+                        for row in rows:
+                            writer.writerow(row)
+            
+            # Enviar archivo si hay datos
+            if rows:
+                try:
+                    with open(backup_path, 'rb') as f:
+                        fecha_str = datetime.now().strftime("%Y%m%d_%H%M")
+                        filename = f"backup_finanzas_{fecha_str}.csv"
+                        
+                        self.bot.send_document(
+                            user_id,
+                            f,
+                            caption=f"📄 Backup manual - {datetime.now().strftime('%d/%m/%Y %H:%M')}\n\n"
+                                   f"📊 Total de registros: {len(rows)}",
+                            visible_file_name=filename
+                        )
+                        
+                    logger.info(f"Backup manual enviado: {len(rows)} registros")
+                    
+                except Exception as e:
+                    logger.error(f"Error enviando backup manual: {e}")
+                    self.bot.reply_to(message, f"{BotConstants.ERROR} Error enviando backup")
+                    
+            else:
+                self.bot.reply_to(message, "📄 No hay movimientos para respaldar todavía.")
+            
+            # Limpiar archivo temporal
+            try:
+                os.unlink(backup_path)
+            except:
+                pass
+                
+        except Exception as e:
+            logger.error(f"Error generando backup manual: {e}")
+            self.bot.reply_to(message, BotConstants.STATUS_MESSAGES["error"])
+    
     # ==================== MÉTODOS PRIVADOS ====================
     
     def _send_unauthorized_message(self, message):
         """Envía mensaje de no autorizado"""
         self.bot.reply_to(message, f"{BotConstants.ERROR} No tienes permisos para usar este bot.")
     
-    def _iniciar_wizard_configuracion(self, message):
-        """Inicia el wizard de configuración para usuarios nuevos"""
+    def _iniciar_configuracion_simple(self, message):
+        """Inicia configuración simplificada sin categorías por defecto"""
         user_id = message.from_user.id
         
         # Crear usuario en DB
@@ -191,40 +263,33 @@ class CommandHandlers:
             self.bot.reply_to(message, BotConstants.STATUS_MESSAGES["error"])
             return
         
-        # Establecer estado inicial
+        # Establecer estado para balance inicial
         self._set_user_state(user_id, {"step": "balance_inicial"})
         
         mensaje = self.formatter.format_bienvenida_configuracion()
         self.bot.send_message(message.chat.id, mensaje, parse_mode="Markdown")
     
-    def _continuar_wizard_configuracion(self, message):
-        """Continúa el wizard de configuración"""
+    def _continuar_configuracion_simple(self, message):
+        """Continúa configuración simplificada"""
         user_id = message.from_user.id
         
-        # Determinar paso actual
-        categorias_ingreso = self.db.obtener_categorias("ingreso", user_id)
-        categorias_gasto = self.db.obtener_categorias("gasto", user_id)
+        # Establecer estado para balance inicial
+        self._set_user_state(user_id, {"step": "balance_inicial"})
         
-        if not categorias_ingreso:
-            self._mostrar_paso_categorias_ingreso(message)
-        elif not categorias_gasto:
-            self._mostrar_paso_categorias_gasto(message)
-        else:
-            # Configuración completa
-            self.db.marcar_usuario_configurado(user_id)
-            self._mostrar_menu_principal(message)
+        mensaje = self.formatter.format_bienvenida_configuracion()
+        self.bot.send_message(message.chat.id, mensaje, parse_mode="Markdown")
     
     def _mostrar_menu_principal(self, message):
-        """Muestra el menú principal optimizado"""
+        """Muestra el menú principal con balance diario"""
         user_id = message.from_user.id
         
         try:
-            # Obtener datos necesarios de forma eficiente
-            balance = self.db.obtener_balance_actual(user_id)
+            # Obtener balance diario y resumen mensual
+            balance_diario = self.db.obtener_balance_diario(user_id)
             resumen = self.db.obtener_resumen_mes(user_id)
             
             # Crear mensaje y markup
-            mensaje = self.formatter.format_menu_principal(balance, resumen)
+            mensaje = self.formatter.format_menu_principal(balance_diario, resumen)
             markup = self.formatter.create_main_menu_markup()
             
             self.bot.send_message(
@@ -237,40 +302,6 @@ class CommandHandlers:
         except Exception as e:
             logger.error(f"Error mostrando menu principal: {e}")
             self.bot.reply_to(message, BotConstants.STATUS_MESSAGES["error"])
-    
-    def _mostrar_paso_categorias_ingreso(self, message):
-        """Muestra el paso de configuración de categorías de ingreso"""
-        from utils.markup_builder import MarkupBuilder
-        
-        markup = MarkupBuilder.create_categories_setup_markup(
-            "ingreso", 
-            BotConstants.DEFAULT_INCOME_CATEGORIES
-        )
-        
-        mensaje = self.formatter.format_categorias_setup("ingreso")
-        self.bot.send_message(
-            message.chat.id, 
-            mensaje, 
-            reply_markup=markup, 
-            parse_mode="Markdown"
-        )
-    
-    def _mostrar_paso_categorias_gasto(self, message):
-        """Muestra el paso de configuración de categorías de gasto"""
-        from utils.markup_builder import MarkupBuilder
-        
-        markup = MarkupBuilder.create_categories_setup_markup(
-            "gasto", 
-            BotConstants.DEFAULT_EXPENSE_CATEGORIES
-        )
-        
-        mensaje = self.formatter.format_categorias_setup("gasto")
-        self.bot.send_message(
-            message.chat.id, 
-            mensaje, 
-            reply_markup=markup, 
-            parse_mode="Markdown"
-        )
     
     def _procesar_comando_rapido(self, message, texto: str, tipo: str):
         """Procesa un comando rápido de ingreso/gasto"""
@@ -292,13 +323,13 @@ class CommandHandlers:
             # Obtener categoría por defecto
             categorias = self.db.obtener_categorias(tipo, user_id)
             if not categorias:
-                mensaje = f"{BotConstants.ERROR} No tienes categorías de {tipo} configuradas"
-                self.bot.reply_to(message, mensaje)
-                return
-            
-            # Usar categoría por defecto o primera disponible
-            categoria_default = f"{tipo.title()}s Varios"
-            categoria = categoria_default if categoria_default in categorias else categorias[0]
+                # Crear categoría básica si no existe
+                categoria_default = "Otros"
+                self.db.agregar_categoria(categoria_default, tipo, user_id)
+                categoria = categoria_default
+            else:
+                # Usar primera categoría disponible
+                categoria = categorias[0]
             
             # Registrar movimiento
             if self.db.agregar_movimiento(user_id, tipo, categoria, monto, descripcion):
