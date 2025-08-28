@@ -1,12 +1,12 @@
 """
-Gestor de base de datos optimizado con pool de conexiones y manejo de memoria
+Gestor de base de datos optimizado con pool de conexiones y nuevas funcionalidades
 """
 
 import sqlite3
 import logging
 import threading
 from typing import List, Dict, Optional, Any
-from datetime import date
+from datetime import date, datetime
 from contextlib import contextmanager
 import gc
 from config.settings import BotConstants
@@ -76,7 +76,7 @@ class ConnectionPool:
                     logger.error(f"Error cerrando conexión: {e}")
 
 class DatabaseManager:
-    """Gestor optimizado de base de datos"""
+    """Gestor optimizado de base de datos con nuevas funcionalidades"""
     
     def __init__(self, database_path: str = "finanzas.db", timeout: int = 30):
         self.database_path = database_path
@@ -121,25 +121,17 @@ class DatabaseManager:
             )
         ''')
         
-        # Tabla categorías de ingresos
+        # Tabla categorías unificada (para ingresos, gastos y ahorros)
         cursor.execute('''
-            CREATE TABLE IF NOT EXISTS categorias_ingresos (
+            CREATE TABLE IF NOT EXISTS categorias (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 nombre TEXT NOT NULL,
+                tipo TEXT NOT NULL CHECK (tipo IN ('ingreso', 'gasto', 'ahorro')),
                 activa BOOLEAN DEFAULT 1,
                 user_id INTEGER,
-                FOREIGN KEY (user_id) REFERENCES usuarios (user_id)
-            )
-        ''')
-        
-        # Tabla categorías de gastos
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS categorias_gastos (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                nombre TEXT NOT NULL,
-                activa BOOLEAN DEFAULT 1,
-                user_id INTEGER,
-                FOREIGN KEY (user_id) REFERENCES usuarios (user_id)
+                fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES usuarios (user_id),
+                UNIQUE(nombre, tipo, user_id)
             )
         ''')
         
@@ -155,6 +147,7 @@ class DatabaseManager:
                 mes INTEGER NOT NULL,
                 año INTEGER NOT NULL,
                 user_id INTEGER,
+                fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES usuarios (user_id)
             )
         ''')
@@ -170,6 +163,7 @@ class DatabaseManager:
                 activo BOOLEAN DEFAULT 1,
                 proximo_cobro DATE NOT NULL,
                 user_id INTEGER,
+                fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES usuarios (user_id)
             )
         ''')
@@ -182,8 +176,40 @@ class DatabaseManager:
                 monto REAL,
                 fecha_vencimiento DATE NOT NULL,
                 activo BOOLEAN DEFAULT 1,
+                tipo TEXT DEFAULT 'manual' CHECK (tipo IN ('manual', 'suscripcion')),
+                user_id INTEGER,
+                fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES usuarios (user_id)
+            )
+        ''')
+        
+        # Tabla deudas
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS deudas (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                nombre TEXT NOT NULL,
+                monto REAL NOT NULL,
+                tipo TEXT NOT NULL CHECK (tipo IN ('positiva', 'negativa')),
+                activa BOOLEAN DEFAULT 1,
+                descripcion TEXT,
+                fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                fecha_vencimiento DATE,
                 user_id INTEGER,
                 FOREIGN KEY (user_id) REFERENCES usuarios (user_id)
+            )
+        ''')
+        
+        # Tabla alertas
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS alertas (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tipo TEXT NOT NULL CHECK (tipo IN ('diario', 'mensual')),
+                limite REAL NOT NULL,
+                activa BOOLEAN DEFAULT 1,
+                user_id INTEGER,
+                fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES usuarios (user_id),
+                UNIQUE(tipo, user_id)
             )
         ''')
         
@@ -203,15 +229,49 @@ class DatabaseManager:
                 UNIQUE(mes, año, user_id)
             )
         ''')
+        
+        # Tabla balance diario (para mostrar en menú principal)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS balance_diario (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                fecha DATE NOT NULL,
+                ingresos REAL DEFAULT 0,
+                gastos REAL DEFAULT 0,
+                ahorros REAL DEFAULT 0,
+                balance_final REAL DEFAULT 0,
+                user_id INTEGER,
+                fecha_actualizacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES usuarios (user_id),
+                UNIQUE(fecha, user_id)
+            )
+        ''')
+        
+        # Tabla notificaciones (para alertas pendientes de envío)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS notificaciones_pendientes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                tipo TEXT NOT NULL,
+                mensaje TEXT NOT NULL,
+                datos_json TEXT,
+                fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                procesada BOOLEAN DEFAULT 0,
+                FOREIGN KEY (user_id) REFERENCES usuarios (user_id)
+            )
+        ''')
     
     def _create_indexes(self, cursor):
         """Crea índices para optimizar las consultas más frecuentes"""
         
         indexes = [
-            # Índices para movimientos (consulta más frecuente)
+            # Índices para movimientos
             "CREATE INDEX IF NOT EXISTS idx_movimientos_user_fecha ON movimientos(user_id, fecha)",
             "CREATE INDEX IF NOT EXISTS idx_movimientos_user_mes_año ON movimientos(user_id, mes, año)",
             "CREATE INDEX IF NOT EXISTS idx_movimientos_tipo ON movimientos(tipo)",
+            "CREATE INDEX IF NOT EXISTS idx_movimientos_categoria ON movimientos(categoria)",
+            
+            # Índices para categorías
+            "CREATE INDEX IF NOT EXISTS idx_categorias_user_tipo ON categorias(user_id, tipo, activa)",
             
             # Índices para suscripciones
             "CREATE INDEX IF NOT EXISTS idx_suscripciones_user_activo ON suscripciones(user_id, activo)",
@@ -221,12 +281,22 @@ class DatabaseManager:
             "CREATE INDEX IF NOT EXISTS idx_recordatorios_user_activo ON recordatorios(user_id, activo)",
             "CREATE INDEX IF NOT EXISTS idx_recordatorios_fecha ON recordatorios(fecha_vencimiento, activo)",
             
-            # Índices para categorías
-            "CREATE INDEX IF NOT EXISTS idx_categorias_ingresos_user ON categorias_ingresos(user_id, activa)",
-            "CREATE INDEX IF NOT EXISTS idx_categorias_gastos_user ON categorias_gastos(user_id, activa)",
+            # Índices para deudas
+            "CREATE INDEX IF NOT EXISTS idx_deudas_user_activa ON deudas(user_id, activa)",
+            "CREATE INDEX IF NOT EXISTS idx_deudas_tipo ON deudas(tipo)",
+            
+            # Índices para alertas
+            "CREATE INDEX IF NOT EXISTS idx_alertas_user_activa ON alertas(user_id, activa)",
+            "CREATE INDEX IF NOT EXISTS idx_alertas_tipo ON alertas(tipo)",
             
             # Índices para resumen mensual
-            "CREATE INDEX IF NOT EXISTS idx_resumen_user_periodo ON resumen_mensual(user_id, año, mes)"
+            "CREATE INDEX IF NOT EXISTS idx_resumen_user_periodo ON resumen_mensual(user_id, año, mes)",
+            
+            # Índices para balance diario
+            "CREATE INDEX IF NOT EXISTS idx_balance_diario_user_fecha ON balance_diario(user_id, fecha)",
+            
+            # Índices para notificaciones
+            "CREATE INDEX IF NOT EXISTS idx_notificaciones_user_procesada ON notificaciones_pendientes(user_id, procesada)"
         ]
         
         for index_sql in indexes:
@@ -310,11 +380,11 @@ class DatabaseManager:
             logger.error(f"Error actualizando balance inicial: {e}")
             return False
     
-    # ==================== OPERACIONES DE CATEGORÍAS ====================
+    # ==================== OPERACIONES DE CATEGORÍAS UNIFICADAS ====================
     
     def agregar_categoria(self, nombre: str, tipo: str, user_id: int) -> bool:
-        """Agrega una nueva categoría"""
-        if tipo not in ['ingreso', 'gasto']:
+        """Agrega una nueva categoría (ingreso, gasto o ahorro)"""
+        if tipo not in BotConstants.MOVEMENT_TYPES:
             logger.error(f"Tipo de categoría inválido: {tipo}")
             return False
             
@@ -323,12 +393,12 @@ class DatabaseManager:
             return False
         
         try:
-            tabla = f"categorias_{tipo}s"
             with self.pool.get_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute(f'''
-                    INSERT INTO {tabla} (nombre, user_id) VALUES (?, ?)
-                ''', (nombre.strip(), user_id))
+                cursor.execute('''
+                    INSERT OR IGNORE INTO categorias (nombre, tipo, user_id) 
+                    VALUES (?, ?, ?)
+                ''', (nombre.strip(), tipo, user_id))
                 return cursor.rowcount > 0
                 
         except Exception as e:
@@ -337,24 +407,21 @@ class DatabaseManager:
     
     def obtener_categorias(self, tipo: str, user_id: int) -> List[str]:
         """Obtiene las categorías activas de un tipo"""
-        if tipo not in ['ingreso', 'gasto']:
+        if tipo not in BotConstants.MOVEMENT_TYPES:
             logger.error(f"Tipo de categoría inválido: {tipo}")
             return []
         
         try:
-            tabla = f"categorias_{tipo}s"
             with self.pool.get_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute(f'''
-                    SELECT nombre FROM {tabla} 
-                    WHERE user_id = ? AND activa = 1
+                cursor.execute('''
+                    SELECT nombre FROM categorias 
+                    WHERE user_id = ? AND tipo = ? AND activa = 1
                     ORDER BY nombre
                     LIMIT 50
-                ''', (user_id,))
+                ''', (user_id, tipo))
                 
                 categorias = [row[0] for row in cursor.fetchall()]
-                
-                # Liberar memoria explícitamente
                 cursor.close()
                 gc.collect()
                 
@@ -364,19 +431,53 @@ class DatabaseManager:
             logger.error(f"Error obteniendo categorías: {e}")
             return []
     
+    def obtener_categorias_con_totales(self, tipo: str, user_id: int, mes: int = None, año: int = None) -> List[Dict[str, Any]]:
+        """Obtiene categorías con sus totales acumulados"""
+        if not mes or not año:
+            hoy = date.today()
+            mes, año = hoy.month, hoy.year
+        
+        try:
+            with self.pool.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT c.nombre, COALESCE(SUM(m.monto), 0) as total
+                    FROM categorias c
+                    LEFT JOIN movimientos m ON c.nombre = m.categoria 
+                        AND m.user_id = c.user_id 
+                        AND m.tipo = c.tipo
+                        AND m.mes = ? 
+                        AND m.año = ?
+                    WHERE c.user_id = ? AND c.tipo = ? AND c.activa = 1
+                    GROUP BY c.nombre
+                    ORDER BY total DESC, c.nombre
+                ''', (mes, año, user_id, tipo))
+                
+                categorias = []
+                for row in cursor.fetchall():
+                    categorias.append({
+                        'nombre': row[0],
+                        'total': row[1]
+                    })
+                
+                return categorias
+                
+        except Exception as e:
+            logger.error(f"Error obteniendo categorías con totales: {e}")
+            return []
+    
     def desactivar_categoria(self, nombre: str, tipo: str, user_id: int) -> bool:
         """Desactiva una categoría"""
-        if tipo not in ['ingreso', 'gasto']:
+        if tipo not in BotConstants.MOVEMENT_TYPES:
             return False
             
         try:
-            tabla = f"categorias_{tipo}s"
             with self.pool.get_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute(f'''
-                    UPDATE {tabla} SET activa = 0 
-                    WHERE nombre = ? AND user_id = ?
-                ''', (nombre, user_id))
+                cursor.execute('''
+                    UPDATE categorias SET activa = 0 
+                    WHERE nombre = ? AND tipo = ? AND user_id = ?
+                ''', (nombre, tipo, user_id))
                 return cursor.rowcount > 0
                 
         except Exception as e:
@@ -412,8 +513,12 @@ class DatabaseManager:
                 ''', (hoy, tipo, categoria, monto, descripcion.strip(), 
                      hoy.month, hoy.year, user_id))
                 
-                # Invalidar cache del resumen mensual
+                # Invalidar cache
                 self._invalidar_resumen_mensual(cursor, user_id, hoy.month, hoy.year)
+                self._actualizar_balance_diario(cursor, user_id, hoy)
+                
+                # Verificar alertas de límites
+                self._verificar_alertas_limites(cursor, user_id, tipo, monto)
                 
                 return cursor.rowcount > 0
                 
@@ -536,6 +641,47 @@ class DatabaseManager:
             logger.error(f"Error calculando balance: {e}")
             return 0.0
     
+    def obtener_balance_diario(self, user_id: int, fecha: date = None) -> Dict[str, float]:
+        """Obtiene el balance y movimientos del día"""
+        if not fecha:
+            fecha = date.today()
+        
+        try:
+            with self.pool.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                # Calcular movimientos del día
+                cursor.execute('''
+                    SELECT tipo, SUM(monto) 
+                    FROM movimientos 
+                    WHERE user_id = ? AND fecha = ?
+                    GROUP BY tipo
+                ''', (user_id, fecha))
+                
+                movimientos_dia = {"ingreso": 0, "gasto": 0, "ahorro": 0}
+                for tipo, total in cursor.fetchall():
+                    if tipo in movimientos_dia:
+                        movimientos_dia[tipo] = total or 0
+                
+                # Calcular balance actual completo
+                balance_actual = self.obtener_balance_actual(user_id)
+                
+                return {
+                    'balance_actual': balance_actual,
+                    'ingresos_hoy': movimientos_dia['ingreso'],
+                    'gastos_hoy': movimientos_dia['gasto'],
+                    'ahorros_hoy': movimientos_dia['ahorro']
+                }
+                
+        except Exception as e:
+            logger.error(f"Error obteniendo balance diario: {e}")
+            return {
+                'balance_actual': 0,
+                'ingresos_hoy': 0,
+                'gastos_hoy': 0,
+                'ahorros_hoy': 0
+            }
+    
     def obtener_resumen_mes(self, user_id: int, mes: int = None, año: int = None) -> Dict[str, Any]:
         """Obtiene el resumen del mes usando cache cuando es posible"""
         if not mes or not año:
@@ -546,39 +692,6 @@ class DatabaseManager:
             with self.pool.get_connection() as conn:
                 cursor = conn.cursor()
                 
-                # Intentar obtener del cache primero
-                cursor.execute('''
-                    SELECT total_ingresos, total_gastos, total_ahorros, balance_final,
-                           fecha_actualizacion
-                    FROM resumen_mensual 
-                    WHERE user_id = ? AND mes = ? AND año = ?
-                ''', (user_id, mes, año))
-                
-                cached = cursor.fetchone()
-                
-                # Verificar si el cache es reciente (menos de 1 hora para mes actual)
-                cache_valid = False
-                if cached:
-                    if mes != date.today().month or año != date.today().year:
-                        # Mes pasado, cache siempre válido
-                        cache_valid = True
-                    else:
-                        # Mes actual, verificar tiempo
-                        from datetime import datetime, timedelta
-                        cache_time = datetime.fromisoformat(cached[4])
-                        if datetime.now() - cache_time < timedelta(hours=1):
-                            cache_valid = True
-                
-                if cache_valid:
-                    return {
-                        "mes": mes,
-                        "año": año,
-                        "ingresos": cached[0] or 0,
-                        "gastos": cached[1] or 0,
-                        "ahorros": cached[2] or 0,
-                        "balance": cached[3] or 0
-                    }
-                
                 # Calcular resumen desde movimientos
                 return self._calcular_resumen_mensual(cursor, user_id, mes, año)
                 
@@ -587,7 +700,7 @@ class DatabaseManager:
             return {"mes": mes, "año": año, "ingresos": 0, "gastos": 0, "ahorros": 0, "balance": 0}
     
     def _calcular_resumen_mensual(self, cursor, user_id: int, mes: int, año: int) -> Dict[str, Any]:
-        """Calcula y cachea el resumen mensual"""
+        """Calcula el resumen mensual"""
         try:
             # Calcular totales del mes
             cursor.execute('''
@@ -602,17 +715,8 @@ class DatabaseManager:
                 if tipo in totales:
                     totales[tipo] = total or 0
             
-            # Calcular balance final acumulativo
-            balance_final = self._calcular_balance_hasta_mes(cursor, user_id, mes, año)
-            
-            # Guardar en cache
-            cursor.execute('''
-                INSERT OR REPLACE INTO resumen_mensual 
-                (mes, año, total_ingresos, total_gastos, total_ahorros, 
-                 balance_final, user_id, fecha_actualizacion)
-                VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-            ''', (mes, año, totales["ingreso"], totales["gasto"], 
-                 totales["ahorro"], balance_final, user_id))
+            # Calcular balance final
+            balance_final = self.obtener_balance_actual(user_id)
             
             return {
                 "mes": mes,
@@ -626,48 +730,6 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Error calculando resumen mensual: {e}")
             return {"mes": mes, "año": año, "ingresos": 0, "gastos": 0, "ahorros": 0, "balance": 0}
-    
-    def _calcular_balance_hasta_mes(self, cursor, user_id: int, mes: int, año: int) -> float:
-        """Calcula el balance acumulado hasta un mes específico"""
-        try:
-            # Obtener balance inicial
-            cursor.execute(
-                'SELECT balance_inicial FROM usuarios WHERE user_id = ? LIMIT 1',
-                (user_id,)
-            )
-            result = cursor.fetchone()
-            balance_inicial = result[0] if result else 0.0
-            
-            # Calcular movimientos hasta la fecha
-            cursor.execute('''
-                SELECT SUM(CASE 
-                    WHEN tipo = 'ingreso' THEN monto 
-                    WHEN tipo = 'gasto' THEN -monto 
-                    WHEN tipo = 'ahorro' THEN -monto 
-                    ELSE 0 
-                END) as balance_movimientos
-                FROM movimientos 
-                WHERE user_id = ? AND (año < ? OR (año = ? AND mes <= ?))
-            ''', (user_id, año, año, mes))
-            
-            result = cursor.fetchone()
-            balance_movimientos = result[0] if result and result[0] else 0.0
-            
-            return balance_inicial + balance_movimientos
-            
-        except Exception as e:
-            logger.error(f"Error calculando balance hasta mes: {e}")
-            return 0.0
-    
-    def _invalidar_resumen_mensual(self, cursor, user_id: int, mes: int, año: int):
-        """Invalida el cache del resumen mensual"""
-        try:
-            cursor.execute('''
-                DELETE FROM resumen_mensual 
-                WHERE user_id = ? AND mes = ? AND año = ?
-            ''', (user_id, mes, año))
-        except Exception as e:
-            logger.error(f"Error invalidando cache resumen: {e}")
     
     # ==================== OPERACIONES DE SUSCRIPCIONES ====================
     
@@ -770,7 +832,7 @@ class DatabaseManager:
             return []
     
     def procesar_suscripcion(self, suscripcion_id: int) -> Optional[Dict[str, Any]]:
-        """Procesa el cobro de una suscripción y retorna datos del procesamiento"""
+        """Procesa el cobro de una suscripción"""
         try:
             with self.pool.get_connection() as conn:
                 cursor = conn.cursor()
@@ -819,7 +881,7 @@ class DatabaseManager:
                     WHERE id = ?
                 ''', (proximo_cobro, suscripcion_id))
                 
-                # Invalidar cache del resumen mensual
+                # Invalidar cache
                 self._invalidar_resumen_mensual(cursor, user_id, hoy.month, hoy.year)
                 
                 return {
@@ -874,6 +936,35 @@ class DatabaseManager:
             logger.error(f"Error agregando recordatorio: {e}")
             return False
     
+    def obtener_recordatorios_activos(self, user_id: int) -> List[Dict[str, Any]]:
+        """Obtiene los recordatorios activos del usuario"""
+        try:
+            with self.pool.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT id, descripcion, monto, fecha_vencimiento
+                    FROM recordatorios 
+                    WHERE user_id = ? AND activo = 1
+                    ORDER BY fecha_vencimiento
+                    LIMIT 50
+                ''', (user_id,))
+                
+                recordatorios = []
+                for row in cursor.fetchall():
+                    recordatorios.append({
+                        'id': row[0],
+                        'descripcion': row[1],
+                        'monto': row[2],
+                        'fecha_vencimiento': row[3]
+                    })
+                
+                cursor.close()
+                return recordatorios
+                
+        except Exception as e:
+            logger.error(f"Error obteniendo recordatorios activos: {e}")
+            return []
+    
     def obtener_recordatorios_pendientes(self) -> List[Dict[str, Any]]:
         """Obtiene recordatorios que vencen hoy"""
         try:
@@ -905,7 +996,7 @@ class DatabaseManager:
             return []
     
     def marcar_recordatorio_procesado(self, recordatorio_id: int) -> bool:
-        """Marca un recordatorio como procesado (lo desactiva)"""
+        """Marca un recordatorio como procesado"""
         try:
             with self.pool.get_connection() as conn:
                 cursor = conn.cursor()
@@ -920,6 +1011,320 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Error marcando recordatorio procesado: {e}")
             return False
+    
+    # ==================== OPERACIONES DE DEUDAS ====================
+    
+    def agregar_deuda(self, user_id: int, nombre: str, monto: float, tipo: str, descripcion: str = "") -> bool:
+        """Agrega una nueva deuda"""
+        if tipo not in BotConstants.DEBT_TYPES:
+            logger.error(f"Tipo de deuda inválido: {tipo}")
+            return False
+        
+        if len(nombre.strip()) > BotConstants.MAX_DEBT_NAME_LENGTH:
+            logger.error(f"Nombre de deuda muy largo: {len(nombre)}")
+            return False
+        
+        try:
+            with self.pool.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT INTO deudas (nombre, monto, tipo, descripcion, user_id)
+                    VALUES (?, ?, ?, ?, ?)
+                ''', (nombre.strip(), abs(monto), tipo, descripcion.strip(), user_id))
+                
+                return cursor.rowcount > 0
+                
+        except Exception as e:
+            logger.error(f"Error agregando deuda: {e}")
+            return False
+    
+    def obtener_deudas_activas(self, user_id: int) -> List[Dict[str, Any]]:
+        """Obtiene las deudas activas del usuario"""
+        try:
+            with self.pool.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT id, nombre, monto, tipo, descripcion, fecha_creacion
+                    FROM deudas 
+                    WHERE user_id = ? AND activa = 1
+                    ORDER BY fecha_creacion DESC
+                    LIMIT 50
+                ''', (user_id,))
+                
+                deudas = []
+                for row in cursor.fetchall():
+                    # Convertir monto según el tipo
+                    monto_real = row[2] if row[3] == 'positiva' else -row[2]
+                    deudas.append({
+                        'id': row[0],
+                        'nombre': row[1],
+                        'monto': monto_real,
+                        'tipo': row[3],
+                        'descripcion': row[4] or "",
+                        'fecha_creacion': row[5]
+                    })
+                
+                return deudas
+                
+        except Exception as e:
+            logger.error(f"Error obteniendo deudas: {e}")
+            return []
+    
+    def marcar_deuda_pagada(self, deuda_id: int, user_id: int) -> bool:
+        """Marca una deuda como pagada (la desactiva)"""
+        try:
+            with self.pool.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    UPDATE deudas 
+                    SET activa = 0 
+                    WHERE id = ? AND user_id = ?
+                ''', (deuda_id, user_id))
+                
+                return cursor.rowcount > 0
+                
+        except Exception as e:
+            logger.error(f"Error marcando deuda pagada: {e}")
+            return False
+    
+    # ==================== OPERACIONES DE ALERTAS ====================
+    
+    def agregar_alerta(self, user_id: int, tipo: str, limite: float) -> bool:
+        """Agrega o actualiza una alerta de límite de gastos"""
+        if tipo not in BotConstants.ALERT_TYPES:
+            logger.error(f"Tipo de alerta inválido: {tipo}")
+            return False
+        
+        try:
+            with self.pool.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT OR REPLACE INTO alertas (tipo, limite, user_id)
+                    VALUES (?, ?, ?)
+                ''', (tipo, limite, user_id))
+                
+                return cursor.rowcount > 0
+                
+        except Exception as e:
+            logger.error(f"Error agregando alerta: {e}")
+            return False
+    
+    def obtener_alertas_activas(self, user_id: int) -> List[Dict[str, Any]]:
+        """Obtiene las alertas activas del usuario"""
+        try:
+            with self.pool.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT id, tipo, limite
+                    FROM alertas 
+                    WHERE user_id = ? AND activa = 1
+                    ORDER BY tipo
+                ''', (user_id,))
+                
+                alertas = []
+                for row in cursor.fetchall():
+                    alertas.append({
+                        'id': row[0],
+                        'tipo': row[1],
+                        'limite': row[2]
+                    })
+                
+                return alertas
+                
+        except Exception as e:
+            logger.error(f"Error obteniendo alertas: {e}")
+            return []
+    
+    def desactivar_alerta(self, alerta_id: int, user_id: int) -> bool:
+        """Desactiva una alerta"""
+        try:
+            with self.pool.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    UPDATE alertas 
+                    SET activa = 0 
+                    WHERE id = ? AND user_id = ?
+                ''', (alerta_id, user_id))
+                
+                return cursor.rowcount > 0
+                
+        except Exception as e:
+            logger.error(f"Error desactivando alerta: {e}")
+            return False
+    
+    # ==================== MÉTODOS AUXILIARES Y OPTIMIZACIÓN ====================
+    
+    def _verificar_alertas_limites(self, cursor, user_id: int, tipo_movimiento: str, monto: float):
+        """Verifica si se superaron los límites de alertas"""
+        if tipo_movimiento != 'gasto':
+            return  # Solo verificar para gastos
+        
+        try:
+            hoy = date.today()
+            
+            # Verificar alerta diaria
+            cursor.execute('''
+                SELECT limite FROM alertas 
+                WHERE user_id = ? AND tipo = 'diario' AND activa = 1
+                LIMIT 1
+            ''', (user_id,))
+            
+            alerta_diaria = cursor.fetchone()
+            if alerta_diaria:
+                # Calcular gastos del día
+                cursor.execute('''
+                    SELECT COALESCE(SUM(monto), 0) 
+                    FROM movimientos 
+                    WHERE user_id = ? AND tipo = 'gasto' AND fecha = ?
+                ''', (user_id, hoy))
+                
+                gastos_dia = cursor.fetchone()[0]
+                if gastos_dia > alerta_diaria[0]:
+                    # Guardar notificación de alerta superada
+                    self._guardar_notificacion_alerta(cursor, user_id, 'diario', alerta_diaria[0], gastos_dia)
+            
+            # Verificar alerta mensual
+            cursor.execute('''
+                SELECT limite FROM alertas 
+                WHERE user_id = ? AND tipo = 'mensual' AND activa = 1
+                LIMIT 1
+            ''', (user_id,))
+            
+            alerta_mensual = cursor.fetchone()
+            if alerta_mensual:
+                # Calcular gastos del mes
+                cursor.execute('''
+                    SELECT COALESCE(SUM(monto), 0) 
+                    FROM movimientos 
+                    WHERE user_id = ? AND tipo = 'gasto' AND mes = ? AND año = ?
+                ''', (user_id, hoy.month, hoy.year))
+                
+                gastos_mes = cursor.fetchone()[0]
+                if gastos_mes > alerta_mensual[0]:
+                    # Guardar notificación de alerta superada
+                    self._guardar_notificacion_alerta(cursor, user_id, 'mensual', alerta_mensual[0], gastos_mes)
+            
+        except Exception as e:
+            logger.error(f"Error verificando alertas: {e}")
+    
+    def _guardar_notificacion_alerta(self, cursor, user_id: int, tipo: str, limite: float, gastado: float):
+        """Guarda una notificación de alerta para ser enviada"""
+        try:
+            import json
+            
+            datos_alerta = {
+                'tipo': tipo,
+                'limite': limite,
+                'gastado': gastado,
+                'exceso': gastado - limite
+            }
+            
+            mensaje = f"🚨 ¡LÍMITE {tipo.upper()} SUPERADO! Límite: ${limite:,.2f}, Gastado: ${gastado:,.2f}"
+            
+            cursor.execute('''
+                INSERT INTO notificaciones_pendientes 
+                (user_id, tipo, mensaje, datos_json)
+                VALUES (?, 'alerta_limite', ?, ?)
+            ''', (user_id, mensaje, json.dumps(datos_alerta)))
+            
+            logger.warning(f"ALERTA USUARIO {user_id}: Límite {tipo} superado - Límite: {limite}, Gastado: {gastado}")
+            
+        except Exception as e:
+            logger.error(f"Error guardando notificación de alerta: {e}")
+    
+    def obtener_notificaciones_pendientes(self, user_id: int = None) -> List[Dict[str, Any]]:
+        """Obtiene notificaciones pendientes de envío"""
+        try:
+            with self.pool.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                if user_id:
+                    cursor.execute('''
+                        SELECT id, user_id, tipo, mensaje, datos_json, fecha_creacion
+                        FROM notificaciones_pendientes 
+                        WHERE user_id = ? AND procesada = 0
+                        ORDER BY fecha_creacion
+                        LIMIT 50
+                    ''', (user_id,))
+                else:
+                    cursor.execute('''
+                        SELECT id, user_id, tipo, mensaje, datos_json, fecha_creacion
+                        FROM notificaciones_pendientes 
+                        WHERE procesada = 0
+                        ORDER BY fecha_creacion
+                        LIMIT 100
+                    ''')
+                
+                notificaciones = []
+                for row in cursor.fetchall():
+                    notificaciones.append({
+                        'id': row[0],
+                        'user_id': row[1],
+                        'tipo': row[2],
+                        'mensaje': row[3],
+                        'datos_json': row[4],
+                        'fecha_creacion': row[5]
+                    })
+                
+                return notificaciones
+                
+        except Exception as e:
+            logger.error(f"Error obteniendo notificaciones pendientes: {e}")
+            return []
+    
+    def marcar_notificacion_procesada(self, notificacion_id: int) -> bool:
+        """Marca una notificación como procesada"""
+        try:
+            with self.pool.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    UPDATE notificaciones_pendientes 
+                    SET procesada = 1 
+                    WHERE id = ?
+                ''', (notificacion_id,))
+                
+                return cursor.rowcount > 0
+                
+        except Exception as e:
+            logger.error(f"Error marcando notificación procesada: {e}")
+            return False
+    
+    def _actualizar_balance_diario(self, cursor, user_id: int, fecha: date):
+        """Actualiza el cache de balance diario"""
+        try:
+            # Calcular movimientos del día
+            cursor.execute('''
+                SELECT tipo, SUM(monto) 
+                FROM movimientos 
+                WHERE user_id = ? AND fecha = ?
+                GROUP BY tipo
+            ''', (user_id, fecha))
+            
+            movimientos = {"ingreso": 0, "gasto": 0, "ahorro": 0}
+            for tipo, total in cursor.fetchall():
+                if tipo in movimientos:
+                    movimientos[tipo] = total or 0
+            
+            # Actualizar cache
+            cursor.execute('''
+                INSERT OR REPLACE INTO balance_diario 
+                (fecha, ingresos, gastos, ahorros, user_id)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (fecha, movimientos['ingreso'], movimientos['gasto'], 
+                 movimientos['ahorro'], user_id))
+            
+        except Exception as e:
+            logger.error(f"Error actualizando balance diario: {e}")
+    
+    def _invalidar_resumen_mensual(self, cursor, user_id: int, mes: int, año: int):
+        """Invalida el cache del resumen mensual"""
+        try:
+            cursor.execute('''
+                DELETE FROM resumen_mensual 
+                WHERE user_id = ? AND mes = ? AND año = ?
+            ''', (user_id, mes, año))
+        except Exception as e:
+            logger.error(f"Error invalidando cache resumen: {e}")
     
     # ==================== OPERACIONES DE MANTENIMIENTO ====================
     
@@ -939,6 +1344,13 @@ class DatabaseManager:
                 ''', (fecha_limite,))
                 recordatorios_limpiados = cursor.rowcount
                 
+                # Limpiar notificaciones procesadas antiguas
+                cursor.execute('''
+                    DELETE FROM notificaciones_pendientes 
+                    WHERE procesada = 1 AND fecha_creacion < ?
+                ''', (fecha_limite,))
+                notificaciones_limpiadas = cursor.rowcount
+                
                 # Limpiar cache de resúmenes muy antiguos
                 cursor.execute('''
                     DELETE FROM resumen_mensual 
@@ -946,11 +1358,19 @@ class DatabaseManager:
                 ''', (fecha_limite,))
                 resumenes_limpiados = cursor.rowcount
                 
+                # Limpiar balance diario muy antiguo
+                cursor.execute('''
+                    DELETE FROM balance_diario 
+                    WHERE fecha < ?
+                ''', (fecha_limite,))
+                balances_limpiados = cursor.rowcount
+                
                 # VACUUM para reclamar espacio
                 cursor.execute('VACUUM')
                 
                 logger.info(f"Limpieza completada: {recordatorios_limpiados} recordatorios, "
-                           f"{resumenes_limpiados} resumenes")
+                           f"{notificaciones_limpiadas} notificaciones, {resumenes_limpiados} resumenes, "
+                           f"{balances_limpiados} balances")
                 
                 return True
                 
@@ -966,7 +1386,8 @@ class DatabaseManager:
                 
                 stats = {}
                 tablas = ['usuarios', 'movimientos', 'suscripciones', 'recordatorios', 
-                        'categorias_ingresos', 'categorias_gastos', 'resumen_mensual']
+                        'categorias', 'deudas', 'alertas', 'resumen_mensual', 
+                        'balance_diario', 'notificaciones_pendientes']
                 
                 for tabla in tablas:
                     cursor.execute(f'SELECT COUNT(*) FROM {tabla}')
@@ -976,4 +1397,49 @@ class DatabaseManager:
                 
         except Exception as e:
             logger.error(f"Error obteniendo estadísticas: {e}")
+            return {}
+    
+    def realizar_backup_completo(self, user_id: int) -> Dict[str, Any]:
+        """Realiza un backup completo de todos los datos del usuario"""
+        try:
+            backup_data = {}
+            
+            with self.pool.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                # Datos del usuario
+                cursor.execute('SELECT * FROM usuarios WHERE user_id = ?', (user_id,))
+                backup_data['usuario'] = dict(cursor.fetchone()) if cursor.fetchone() else None
+                
+                # Movimientos
+                cursor.execute('SELECT * FROM movimientos WHERE user_id = ? ORDER BY fecha DESC', (user_id,))
+                backup_data['movimientos'] = [dict(row) for row in cursor.fetchall()]
+                
+                # Categorías
+                cursor.execute('SELECT * FROM categorias WHERE user_id = ? ORDER BY tipo, nombre', (user_id,))
+                backup_data['categorias'] = [dict(row) for row in cursor.fetchall()]
+                
+                # Suscripciones
+                cursor.execute('SELECT * FROM suscripciones WHERE user_id = ? ORDER BY nombre', (user_id,))
+                backup_data['suscripciones'] = [dict(row) for row in cursor.fetchall()]
+                
+                # Recordatorios
+                cursor.execute('SELECT * FROM recordatorios WHERE user_id = ? ORDER BY fecha_vencimiento', (user_id,))
+                backup_data['recordatorios'] = [dict(row) for row in cursor.fetchall()]
+                
+                # Deudas
+                cursor.execute('SELECT * FROM deudas WHERE user_id = ? ORDER BY fecha_creacion', (user_id,))
+                backup_data['deudas'] = [dict(row) for row in cursor.fetchall()]
+                
+                # Alertas
+                cursor.execute('SELECT * FROM alertas WHERE user_id = ? ORDER BY tipo', (user_id,))
+                backup_data['alertas'] = [dict(row) for row in cursor.fetchall()]
+                
+                backup_data['fecha_backup'] = datetime.now().isoformat()
+                backup_data['version'] = '2.0'
+                
+                return backup_data
+                
+        except Exception as e:
+            logger.error(f"Error realizando backup completo: {e}")
             return {}
