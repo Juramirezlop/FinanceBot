@@ -1,9 +1,10 @@
 """
-Gestor principal del bot de Telegram
+Gestor principal del bot de Telegram - CORREGIDO COMPLETAMENTE
 """
 
 import threading
 import logging
+import time
 from typing import Optional, Dict, Any
 import telebot
 from telebot.types import BotCommand
@@ -45,15 +46,19 @@ class BotManager:
         try:
             self.bot = telebot.TeleBot(
                 self.config.BOT_TOKEN,
-                parse_mode='Markdown',
+                parse_mode=None,  # No usar parse_mode por defecto para evitar errores
                 threaded=True
             )
             
             # Configurar comandos del bot
             self._set_bot_commands()
             
-            # Configurar manejo de errores
-            self._setup_error_handling()
+            # Configurar manejo de errores CORRECTO
+            def exception_handler(exception):
+                logger.error(f"Error no manejado en telebot: {exception}")
+                return True  # Continuar funcionando
+            
+            self.bot.exception_handler = exception_handler
             
             logger.info("Bot de Telegram inicializado")
             return True
@@ -91,7 +96,7 @@ class BotManager:
         self.callback_handlers = CallbackHandlers(self)
         self.message_handlers = MessageHandlers(self)
         
-        # Registrar comandos
+        # Registrar comandos (SIN /reset ni /config)
         self.bot.message_handler(commands=['start'])(
             self.command_handlers.handle_start
         )
@@ -107,17 +112,11 @@ class BotManager:
         self.bot.message_handler(commands=['resumen'])(
             self.command_handlers.handle_resumen
         )
-        self.bot.message_handler(commands=['config'])(
-            self.command_handlers.handle_config
+        self.bot.message_handler(commands=['backup'])(
+            self.command_handlers.handle_backup
         )
         self.bot.message_handler(commands=['ayuda', 'help'])(
             self.command_handlers.handle_ayuda
-        )
-        self.bot.message_handler(commands=['backup'])(  # NUEVO COMANDO
-            self.command_handlers.handle_backup
-        )
-        self.bot.message_handler(commands=['reset'])(
-            self.command_handlers.handle_reset
         )
         
         # Registrar callbacks
@@ -164,7 +163,7 @@ class BotManager:
             logger.error(f"Error iniciando Flask: {e}")
     
     def start_polling(self):
-        """Inicia el polling del bot"""
+        """Inicia el polling del bot con manejo mejorado de conflictos"""
         if not self.bot:
             raise RuntimeError("Bot no inicializado")
         
@@ -174,15 +173,43 @@ class BotManager:
             # Iniciar servidor Flask para Render
             self.start_flask_server()
             
-            # Iniciar polling
-            self.bot.infinity_polling(
-                timeout=90,
-                skip_pending=True,
-                none_stop=True
-            )
+            # Intentar polling con reintentos para error 409
+            max_retries = 3
+            retry_delay = 30
             
+            for attempt in range(max_retries):
+                try:
+                    logger.info(f"Iniciando polling (intento {attempt + 1}/{max_retries})")
+                    
+                    # Iniciar polling SIN none_stop para mejor manejo de errores
+                    self.bot.infinity_polling(
+                        timeout=60,
+                        skip_pending=True,
+                        allowed_updates=["message", "callback_query"]
+                    )
+                    break
+                    
+                except Exception as e:
+                    error_msg = str(e).lower()
+                    
+                    if "409" in error_msg or "conflict" in error_msg:
+                        if attempt < max_retries - 1:
+                            logger.warning(f"Error 409. Reintentando en {retry_delay} segundos...")
+                            print(f"⚠️  Otra instancia detectada. Esperando {retry_delay}s...")
+                            time.sleep(retry_delay)
+                            continue
+                        else:
+                            logger.error("Máximo de reintentos alcanzado para error 409")
+                    
+                    # Para otros errores, lanzar inmediatamente
+                    raise e
+        
+        except KeyboardInterrupt:
+            logger.info("🛑 Bot detenido por el usuario")
+            self.shutdown()
         except Exception as e:
-            logger.error(f"Error en polling: {e}")
+            logger.error(f"❌ Error fatal en el bot: {e}")
+            self.shutdown()
             raise
     
     def shutdown(self):
@@ -235,9 +262,8 @@ class BotManager:
     
     def cleanup_old_states(self):
         """Limpia estados antiguos de usuarios inactivos"""
-        import time
         current_time = time.time()
-        timeout = 3600  # 1 hora
+        timeout = 7200  # 2 horas
         
         to_remove = []
         for user_id, state in self.user_states.items():
@@ -250,16 +276,15 @@ class BotManager:
             logger.debug(f"Estado expirado limpiado para usuario {user_id}")
     
     def _set_bot_commands(self):
-        """Configura los comandos del bot en Telegram"""
+        """Configura los comandos del bot en Telegram - LIMPIADOS"""
         commands = [
-            BotCommand("start", "Iniciar bot y mostrar menú principal"),
+            BotCommand("start", "Menú principal"),
             BotCommand("balance", "Ver balance total"),
-            BotCommand("gasto", "Registrar gasto rápido"),
-            BotCommand("ingreso", "Registrar ingreso rápido"),
-            BotCommand("resumen", "Ver resumen del mes"),
-            BotCommand("config", "Configuración del bot"),
-            BotCommand("backup", "Generar backup manual"),  # NUEVO COMANDO
-            BotCommand("ayuda", "Mostrar ayuda y guía de uso")
+            BotCommand("gasto", "Registro rápido de gasto"),
+            BotCommand("ingreso", "Registro rápido de ingreso"),
+            BotCommand("resumen", "Resumen del mes actual"),
+            BotCommand("backup", "Generar backup manual"),
+            BotCommand("ayuda", "Guía completa de uso")
         ]
         
         try:
@@ -267,72 +292,3 @@ class BotManager:
             logger.info("Comandos del bot configurados")
         except Exception as e:
             logger.error(f"Error configurando comandos: {e}")
-    
-    def _setup_error_handling(self):
-        """Configura el manejo de errores del bot"""
-        def exception_handler(exception):
-            logger.error(f"Error no manejado en telebot: {exception}")
-            return True  # Continuar funcionando
-        
-        self.bot.exception_handler = exception_handler
-
-    """
-    Mejora al bot_manager para manejar error 409 (conflicto de instancias)
-    """
-    
-    def start_polling(self):
-        """Inicia el polling del bot con manejo de conflictos"""
-        if not self.bot:
-            raise RuntimeError("Bot no inicializado")
-        
-        try:
-            self.is_running = True
-            
-            # Iniciar servidor Flask para Render
-            self.start_flask_server()
-            
-            # Intentar polling con reintentos para error 409
-            max_retries = 5
-            retry_delay = 30  # 30 segundos entre reintentos
-            
-            for attempt in range(max_retries):
-                try:
-                    logger.info(f"Iniciando polling (intento {attempt + 1}/{max_retries})")
-                    
-                    # Iniciar polling
-                    self.bot.infinity_polling(
-                        timeout=90,
-                        skip_pending=True,
-                        none_stop=True,
-                        allowed_updates=["message", "callback_query"]
-                    )
-                    break  # Si llegamos aquí, el polling fue exitoso
-                    
-                except Exception as e:
-                    error_msg = str(e).lower()
-                    
-                    if "409" in error_msg or "conflict" in error_msg:
-                        if attempt < max_retries - 1:
-                            logger.warning(f"Error 409 detectado. Esperando {retry_delay} segundos antes del reintento {attempt + 2}")
-                            print(f"⚠️  Detectada otra instancia del bot. Esperando {retry_delay} segundos...")
-                            
-                            import time
-                            time.sleep(retry_delay)
-                            retry_delay += 10  # Incrementar delay en cada intento
-                            continue
-                        else:
-                            logger.error("Máximo número de reintentos alcanzado para error 409")
-                            raise e
-                    else:
-                        # Otros errores, no reintentar
-                        raise e
-            
-        except KeyboardInterrupt:
-            logger.info("🛑 Bot detenido por el usuario")
-            print("\n🛑 Bot detenido correctamente")
-            self.shutdown()
-        except Exception as e:
-            logger.error(f"❌ Error fatal en el bot: {e}")
-            print(f"❌ Error fatal: {e}")
-            self.shutdown()
-            raise
