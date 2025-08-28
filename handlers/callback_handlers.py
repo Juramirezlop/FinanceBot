@@ -55,6 +55,8 @@ class CallbackHandlers:
                 self._handle_view_actions(call, data)
             elif data.startswith("agregar_"):
                 self._handle_add_actions(call, data)
+            elif data.startswith("config_"):
+                self._handle_config_actions(call, data)
             else:
                 logger.warning(f"Callback no reconocido: {data}")
                 self._show_main_menu(call)
@@ -668,3 +670,35 @@ class CallbackHandlers:
         import time
         state['timestamp'] = time.time()
         self.bot_manager.set_user_state(user_id, state)
+    
+    def _handle_config_actions(self, call, data):
+        """Maneja las acciones de configuración"""
+        if data == "config_categorias":
+            self.bot.edit_message_text(
+                "⚙️ **Gestión de Categorías**\n\n"
+                "Funcionalidad en desarrollo.\n"
+                "Por ahora puedes agregar categorías durante el registro de movimientos.",
+                call.message.chat.id,
+                call.message.message_id,
+                reply_markup=self.markup_builder.create_back_to_menu_markup()
+            )
+        elif data == "config_balance":
+            self.bot.edit_message_text(
+                "💰 **Cambiar Balance Inicial**\n\n"
+                "Funcionalidad en desarrollo.",
+                call.message.chat.id,
+                call.message.message_id,
+                reply_markup=self.markup_builder.create_back_to_menu_markup()
+            )
+        elif data == "ver_configuracion":
+            user_id = call.from_user.id
+            balance_inicial = "Configurado"  # Podrías obtener el valor real de la DB
+            self.bot.edit_message_text(
+                "📊 **Tu Configuración Actual**\n\n"
+                f"💰 Balance inicial: {balance_inicial}\n"
+                f"👤 Usuario autorizado: {user_id}\n"
+                "📱 Bot configurado correctamente",
+                call.message.chat.id,
+                call.message.message_id,
+                reply_markup=self.markup_builder.create_back_to_menu_markup()
+            )

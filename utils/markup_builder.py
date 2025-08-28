@@ -195,3 +195,12 @@ class MarkupBuilder:
             InlineKeyboardButton(f"{BotConstants.HOME} Menú Principal", callback_data="back_to_menu")
         )
         return markup
+    
+    @staticmethod
+    def create_cancel_markup() -> InlineKeyboardMarkup:
+        """Crea markup para cancelar operación"""
+        markup = InlineKeyboardMarkup()
+        markup.add(
+            InlineKeyboardButton("❌ Cancelar", callback_data="back_to_menu")
+        )
+        return markup

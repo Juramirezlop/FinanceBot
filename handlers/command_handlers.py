@@ -153,6 +153,28 @@ class CommandHandlers:
         except Exception as e:
             logger.error(f"Error en comando ayuda: {e}")
             self.bot.reply_to(message, BotConstants.STATUS_MESSAGES["error"])
+
+    @handle_errors
+    def handle_reset(self, message):
+        """Comando /reset - Reinicia la configuración (solo para desarrollo)"""
+        user_id = message.from_user.id
+        
+        if not self.bot_manager.is_authorized(user_id):
+            return
+        
+        # Solo para pruebas - elimina la DB y recrea
+        try:
+            import os
+            if os.path.exists("finanzas.db"):
+                os.remove("finanzas.db")
+            
+            # Reinicializar DB
+            self.db.initialize()
+            self.db.crear_usuario(user_id)
+            
+            self.bot.reply_to(message, "🔄 Base de datos reiniciada. Envía /start para reconfigurar.")
+        except Exception as e:
+            self.bot.reply_to(message, f"❌ Error reiniciando: {e}")
     
     # ==================== MÉTODOS PRIVADOS ====================
     

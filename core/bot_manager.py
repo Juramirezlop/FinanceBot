@@ -113,7 +113,9 @@ class BotManager:
         self.bot.message_handler(commands=['ayuda', 'help'])(
             self.command_handlers.handle_ayuda
         )
-        
+        self.bot.message_handler(commands=['reset'])(
+            self.command_handlers.handle_reset
+        )
         # Registrar callbacks
         self.bot.callback_query_handler(func=lambda call: True)(
             self.callback_handlers.handle_callback_query

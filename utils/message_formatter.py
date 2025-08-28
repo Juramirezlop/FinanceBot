@@ -158,3 +158,68 @@ class MessageFormatter:
             InlineKeyboardButton(f"{BotConstants.SETTINGS} Configurar", callback_data="menu_configuracion")
         )
         return markup
+    
+    def format_resumen_detallado(self, resumen, balance_actual, resumen_anterior):
+        diferencia = balance_actual - resumen_anterior.get("balance", 0)
+        emoji_diferencia = "📈" if diferencia >= 0 else "📉"
+        
+        return (
+            f"📊 **Resumen {resumen['mes']:02d}/{resumen['año']}**\n\n"
+            f"💰 Balance Actual: **${balance_actual:,.2f}**\n"
+            f"{emoji_diferencia} Cambio vs mes anterior: ${diferencia:,.2f}\n\n"
+            f"📈 **Movimientos del Mes:**\n"
+            f"   💵 Ingresos: ${resumen['ingresos']:,.2f}\n"
+            f"   💸 Gastos: ${resumen['gastos']:,.2f}\n"
+            f"   💳 Ahorros: ${resumen['ahorros']:,.2f}\n\n"
+            f"💡 Neto del mes: ${(resumen['ingresos'] - resumen['gastos'] - resumen['ahorros']):,.2f}"
+        )
+
+    def format_month_movements(self, movimientos, tipo):
+        emoji = "💵" if tipo == "ingreso" else "💸" if tipo == "gasto" else "💳"
+        titulo = tipo.title() + "s"
+        
+        if not movimientos:
+            return f"{emoji} **{titulo} del Mes**\n\n❌ No hay {tipo}s registrados este mes."
+        
+        texto = f"{emoji} **{titulo} del Mes**\n\n"
+        total = 0
+        
+        for mov in movimientos[:10]:
+            total += mov['monto']
+            fecha_str = mov['fecha']
+            
+            texto += f"**{mov['categoria']}** - ${mov['monto']:,.2f}\n"
+            if mov['descripcion']:
+                texto += f"   {fecha_str} - {mov['descripcion']}\n\n"
+            else:
+                texto += f"   {fecha_str}\n\n"
+        
+        if len(movimientos) > 10:
+            texto += f"... y {len(movimientos) - 10} más\n\n"
+        
+        texto += f"💰 **Total: ${total:,.2f}**"
+        return texto
+
+    def format_subscriptions_menu(self):
+        return "🔄 **Suscripciones Automáticas**\n\nGestiona tus pagos recurrentes que se descuentan automáticamente."
+
+    def format_reminders_menu(self):
+        return "🔔 **Recordatorios**\n\nConfigura alertas para pagos importantes."
+
+    def format_historical_data(self, historico):
+        if not historico:
+            return "📈 **Histórico Financiero**\n\nAún no hay datos históricos."
+        
+        texto = "📈 **Histórico Financiero**\n\n"
+        
+        for resumen in historico:
+            neto = resumen['ingresos'] - resumen['gastos'] - resumen['ahorros']
+            emoji = "📈" if neto >= 0 else "📉"
+            
+            texto += (
+                f"{emoji} **{resumen['mes']:02d}/{resumen['año']}**\n"
+                f"   Balance: ${resumen['balance']:,.2f}\n"
+                f"   Neto: ${neto:,.2f}\n\n"
+            )
+        
+        return texto
