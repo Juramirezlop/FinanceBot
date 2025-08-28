@@ -1,5 +1,5 @@
 """
-Handlers de mensajes de texto optimizados
+Handlers de mensajes de texto optimizados con nuevas funcionalidades
 """
 
 import logging
@@ -45,24 +45,42 @@ class MessageHandlers:
             # Procesar según el paso actual
             step = state.get("step", "")
             
+            # Estados existentes
             if step == "balance_inicial":
                 self._process_initial_balance(message, state)
-            elif step.startswith("custom_category_"):
-                self._process_custom_category(message, state)
+            elif step.startswith("nueva_categoria_"):
+                self._process_new_category(message, state)
             elif step.startswith("monto_"):
                 self._process_amount_input(message, state)
             elif step == "descripcion_movimiento":
                 self._process_movement_description(message, state)
+            elif step == "config_nuevo_balance":
+                self._process_new_initial_balance(message, state)
+            
+            # Estados de suscripciones
             elif step == "suscripcion_nombre":
                 self._process_subscription_name(message, state)
             elif step == "suscripcion_monto":
                 self._process_subscription_amount(message, state)
             elif step == "suscripcion_dia":
                 self._process_subscription_day(message, state)
+            
+            # Estados de recordatorios
             elif step == "recordatorio_descripcion":
                 self._process_reminder_description(message, state)
             elif step == "recordatorio_fecha":
                 self._process_reminder_date(message, state)
+            
+            # Estados de deudas (NUEVO)
+            elif step == "deuda_nombre":
+                self._process_debt_name(message, state)
+            elif step == "deuda_monto":
+                self._process_debt_amount(message, state)
+            
+            # Estados de alertas (NUEVO)
+            elif step == "alerta_monto":
+                self._process_alert_amount(message, state)
+            
             else:
                 logger.warning(f"Paso no reconocido: {step}")
                 self._send_help_message(message)
@@ -87,7 +105,7 @@ class MessageHandlers:
                 self.bot.reply_to(
                     message,
                     f"{BotConstants.ERROR} Por favor ingresa un número válido.\n"
-                    "Ejemplo: 100000 o 0 si empiezas desde cero"
+                    "**Ejemplo:** 100000 o 0 si empiezas desde cero"
                 )
                 return
             
@@ -95,16 +113,19 @@ class MessageHandlers:
             
             # Actualizar balance en base de datos
             if self.db.actualizar_balance_inicial(user_id, balance):
-                # Limpiar estado y continuar configuración
+                # Limpiar estado
                 self.bot_manager.clear_user_state(user_id)
+                
+                # Marcar como configurado directamente (sin categorías por defecto)
+                self.db.marcar_usuario_configurado(user_id)
                 
                 self.bot.reply_to(
                     message,
-                    f"{BotConstants.SUCCESS} Balance inicial configurado: ${balance:,.2f}\n\n"
-                    "Continuemos con la configuración de categorías..."
+                    f"{BotConstants.SUCCESS} **¡Configuración Completada!**\n\n"
+                    f"💰 Balance inicial: ${balance:,.2f}\n\n"
+                    f"✨ Ya puedes usar todas las funciones del bot.\n"
+                    f"Envía /start para ver el menú principal"
                 )
-                
-                self._show_income_categories_setup(message)
             else:
                 self.bot.reply_to(
                     message,
@@ -115,11 +136,11 @@ class MessageHandlers:
             self.bot.reply_to(
                 message,
                 f"{BotConstants.ERROR} Por favor ingresa un número válido.\n"
-                "Ejemplo: 100000 o 0 si empiezas desde cero"
+                "**Ejemplo:** 100000 o 0 si empiezas desde cero"
             )
     
-    def _process_custom_category(self, message, state: dict):
-        """Procesa una categoría personalizada"""
+    def _process_new_category(self, message, state: dict):
+        """Procesa una nueva categoría personalizada"""
         user_id = message.from_user.id
         nombre_categoria = message.text.strip()
         
@@ -129,6 +150,8 @@ class MessageHandlers:
             tipo = "ingreso"
         elif "gasto" in step:
             tipo = "gasto"
+        elif "ahorro" in step:
+            tipo = "ahorro"
         else:
             logger.error(f"Tipo de categoría no válido en step: {step}")
             self.bot_manager.clear_user_state(user_id)
@@ -145,16 +168,19 @@ class MessageHandlers:
         # Agregar categoría
         if self.db.agregar_categoria(nombre_categoria, tipo, user_id):
             self.bot_manager.clear_user_state(user_id)
-            self.bot.reply_to(
-                message,
-                f"{BotConstants.SUCCESS} Categoría '{nombre_categoria}' agregada correctamente."
-            )
             
-            # Mostrar paso de configuración correspondiente
-            if tipo == "ingreso":
-                self._show_income_categories_setup(message)
-            else:
-                self._show_expense_categories_setup(message)
+            # Iniciar proceso de agregar movimiento con la nueva categoría
+            emoji = BotConstants.INCOME if tipo == "ingreso" else BotConstants.EXPENSE if tipo == "gasto" else "💳"
+            
+            # Establecer estado para pedir monto
+            self._set_user_state(user_id, {
+                "step": f"monto_{tipo}",
+                "tipo": tipo,
+                "categoria": nombre_categoria
+            })
+            
+            mensaje = self.formatter.format_amount_request(tipo, nombre_categoria, emoji)
+            self.bot.reply_to(message, mensaje, parse_mode="Markdown")
         else:
             self.bot.reply_to(
                 message, 
@@ -174,7 +200,7 @@ class MessageHandlers:
                 self.bot.reply_to(
                     message,
                     f"{BotConstants.ERROR} Por favor ingresa un número válido mayor a 0.\n"
-                    "Ejemplo: 50000 o 25.50"
+                    "**Ejemplo:** 50000 o 25.50"
                 )
                 return
             
@@ -197,7 +223,7 @@ class MessageHandlers:
             self.bot.reply_to(
                 message,
                 f"{BotConstants.ERROR} Por favor ingresa un número válido mayor a 0.\n"
-                "Ejemplo: 50000 o 25.50"
+                "**Ejemplo:** 50000 o 25.50"
             )
     
     def _process_movement_description(self, message, state: dict):
@@ -205,8 +231,8 @@ class MessageHandlers:
         user_id = message.from_user.id
         descripcion = message.text.strip()
         
-        # Permitir omitir descripción
-        if descripcion.lower() in ["sin descripcion", "skip", "omitir", "no"]:
+        # Permitir omitir descripción con palabras simples
+        if descripcion.lower() in BotConstants.SKIP_DESCRIPTION_KEYWORDS:
             descripcion = ""
         
         # Obtener datos del estado
@@ -245,6 +271,49 @@ class MessageHandlers:
         # Limpiar estado
         self.bot_manager.clear_user_state(user_id)
     
+    def _process_new_initial_balance(self, message, state: dict):
+        """Procesa el cambio de balance inicial"""
+        user_id = message.from_user.id
+        text = message.text.strip()
+        
+        try:
+            # Limpiar y validar entrada
+            balance_str = text.replace(",", "").replace("$", "").strip()
+            
+            if not self.validator.is_valid_amount(balance_str, allow_zero=True):
+                self.bot.reply_to(
+                    message,
+                    f"{BotConstants.ERROR} Por favor ingresa un número válido.\n"
+                    "**Ejemplo:** 100000 o 0"
+                )
+                return
+            
+            balance = float(balance_str)
+            
+            # Actualizar balance en base de datos
+            if self.db.actualizar_balance_inicial(user_id, balance):
+                self.bot_manager.clear_user_state(user_id)
+                
+                self.bot.reply_to(
+                    message,
+                    f"{BotConstants.SUCCESS} **Balance inicial actualizado**\n\n"
+                    f"💰 Nuevo balance inicial: ${balance:,.2f}"
+                )
+            else:
+                self.bot.reply_to(
+                    message,
+                    f"{BotConstants.ERROR} Error actualizando el balance. Intenta de nuevo."
+                )
+            
+        except ValueError:
+            self.bot.reply_to(
+                message,
+                f"{BotConstants.ERROR} Por favor ingresa un número válido.\n"
+                "**Ejemplo:** 100000 o 0"
+            )
+    
+    # ==================== SUSCRIPCIONES ====================
+    
     def _process_subscription_name(self, message, state: dict):
         """Procesa el nombre de una suscripción"""
         user_id = message.from_user.id
@@ -277,7 +346,7 @@ class MessageHandlers:
                 self.bot.reply_to(
                     message,
                     f"{BotConstants.ERROR} Por favor ingresa un número válido mayor a 0.\n"
-                    "Ejemplo: 15000 o 9.99"
+                    "**Ejemplo:** 15000 o 9.99"
                 )
                 return
             
@@ -292,13 +361,11 @@ class MessageHandlers:
             categorias = self.db.obtener_categorias("gasto", user_id)
             
             if not categorias:
-                self.bot.reply_to(
-                    message,
-                    f"{BotConstants.ERROR} No tienes categorías de gasto configuradas.\n"
-                    "Ve a Configuración para agregar categorías."
-                )
-                self.bot_manager.clear_user_state(user_id)
-                return
+                # Crear categorías básicas de gasto si no existen
+                categorias_basicas = ["Servicios", "Entretenimiento", "Otros"]
+                for cat in categorias_basicas:
+                    self.db.agregar_categoria(cat, "gasto", user_id)
+                categorias = self.db.obtener_categorias("gasto", user_id)
             
             markup = self.markup_builder.create_subscription_category_markup(categorias)
             mensaje = self.formatter.format_subscription_category_selection(state)
@@ -314,7 +381,7 @@ class MessageHandlers:
             self.bot.reply_to(
                 message,
                 f"{BotConstants.ERROR} Por favor ingresa un número válido mayor a 0.\n"
-                "Ejemplo: 15000 o 9.99"
+                "**Ejemplo:** 15000 o 9.99"
             )
     
     def _process_subscription_day(self, message, state: dict):
@@ -368,8 +435,10 @@ class MessageHandlers:
             self.bot.reply_to(
                 message,
                 f"{BotConstants.ERROR} Por favor ingresa un número válido entre 1 y 31.\n"
-                "Ejemplo: 15 (para el día 15 de cada mes)"
+                "**Ejemplo:** 15 (para el día 15 de cada mes)"
             )
+    
+    # ==================== RECORDATORIOS ====================
     
     def _process_reminder_description(self, message, state: dict):
         """Procesa la descripción de un recordatorio"""
@@ -403,8 +472,8 @@ class MessageHandlers:
                 self.bot.reply_to(
                     message,
                     f"{BotConstants.ERROR} Formato de fecha inválido.\n"
-                    "Usa: DD/MM/YYYY o DD/MM (año actual)\n"
-                    "Ejemplo: 15/03/2024 o 15/03"
+                    "**Usa:** DD/MM/YYYY o DD/MM (año actual)\n"
+                    "**Ejemplo:** 15/03/2024 o 15/03"
                 )
                 return
             
@@ -442,8 +511,148 @@ class MessageHandlers:
             self.bot.reply_to(
                 message,
                 f"{BotConstants.ERROR} Formato de fecha inválido.\n"
-                "Usa: DD/MM/YYYY o DD/MM (año actual)\n"
-                "Ejemplo: 15/03/2024 o 15/03"
+                "**Usa:** DD/MM/YYYY o DD/MM (año actual)\n"
+                "**Ejemplo:** 15/03/2024 o 15/03"
+            )
+    
+    # ==================== DEUDAS (NUEVO) ====================
+    
+    def _process_debt_name(self, message, state: dict):
+        """Procesa el nombre de una deuda"""
+        user_id = message.from_user.id
+        nombre = message.text.strip()
+        
+        if len(nombre) < 2 or len(nombre) > BotConstants.MAX_DEBT_NAME_LENGTH:
+            self.bot.reply_to(
+                message,
+                f"{BotConstants.ERROR} El nombre debe tener entre 2 y {BotConstants.MAX_DEBT_NAME_LENGTH} caracteres."
+            )
+            return
+        
+        # Actualizar estado
+        state["nombre"] = nombre
+        state["step"] = "deuda_tipo"
+        self._set_user_state(user_id, state)
+        
+        # Mostrar opciones de tipo de deuda
+        markup = self.markup_builder.create_debt_type_markup()
+        mensaje = f"💰 **Deuda con: {nombre}**\n\n¿Quién le debe a quién?"
+        
+        self.bot.send_message(
+            message.chat.id,
+            mensaje,
+            parse_mode="Markdown",
+            reply_markup=markup
+        )
+    
+    def _process_debt_amount(self, message, state: dict):
+        """Procesa el monto de una deuda"""
+        user_id = message.from_user.id
+        text = message.text.strip()
+        
+        try:
+            monto_str = text.replace(",", "").replace("$", "").replace("-", "").strip()
+            
+            if not self.validator.is_valid_amount(monto_str):
+                self.bot.reply_to(
+                    message,
+                    f"{BotConstants.ERROR} Por favor ingresa un número válido mayor a 0.\n"
+                    "**Ejemplo:** 50000 o 25000.50"
+                )
+                return
+            
+            monto = float(monto_str)
+            nombre = state.get("nombre", "")
+            tipo = state.get("tipo", "")
+            
+            # Validar datos
+            if not nombre or not tipo:
+                logger.error(f"Datos incompletos para deuda: {state}")
+                self.bot_manager.clear_user_state(user_id)
+                self.bot.reply_to(message, BotConstants.STATUS_MESSAGES["error"])
+                return
+            
+            # Guardar deuda
+            if self.db.agregar_deuda(user_id, nombre, monto, tipo):
+                tipo_texto = "Te deben" if tipo == "positiva" else "Tú debes"
+                mensaje = self.formatter.format_debt_success(nombre, monto, tipo_texto)
+                markup = self.markup_builder.create_debt_success_markup()
+                
+                self.bot.send_message(
+                    message.chat.id,
+                    mensaje,
+                    parse_mode="Markdown",
+                    reply_markup=markup
+                )
+            else:
+                self.bot.reply_to(
+                    message, 
+                    f"{BotConstants.ERROR} Error guardando la deuda. Intenta de nuevo."
+                )
+            
+            # Limpiar estado
+            self.bot_manager.clear_user_state(user_id)
+            
+        except ValueError:
+            self.bot.reply_to(
+                message,
+                f"{BotConstants.ERROR} Por favor ingresa un número válido mayor a 0.\n"
+                "**Ejemplo:** 50000 o 25000.50"
+            )
+    
+    # ==================== ALERTAS (NUEVO) ====================
+    
+    def _process_alert_amount(self, message, state: dict):
+        """Procesa el monto límite de una alerta"""
+        user_id = message.from_user.id
+        text = message.text.strip()
+        
+        try:
+            monto_str = text.replace(",", "").replace("$", "").strip()
+            
+            if not self.validator.is_valid_amount(monto_str):
+                self.bot.reply_to(
+                    message,
+                    f"{BotConstants.ERROR} Por favor ingresa un número válido mayor a 0.\n"
+                    "**Ejemplo:** 50000 (para límite de ${50000:,.2f})"
+                )
+                return
+            
+            limite = float(monto_str)
+            tipo = state.get("tipo", "")
+            
+            # Validar tipo
+            if tipo not in BotConstants.ALERT_TYPES:
+                logger.error(f"Tipo de alerta inválido: {tipo}")
+                self.bot_manager.clear_user_state(user_id)
+                self.bot.reply_to(message, BotConstants.STATUS_MESSAGES["error"])
+                return
+            
+            # Guardar alerta
+            if self.db.agregar_alerta(user_id, tipo, limite):
+                mensaje = self.formatter.format_alert_success(tipo, limite)
+                markup = self.markup_builder.create_alert_success_markup()
+                
+                self.bot.send_message(
+                    message.chat.id,
+                    mensaje,
+                    parse_mode="Markdown",
+                    reply_markup=markup
+                )
+            else:
+                self.bot.reply_to(
+                    message, 
+                    f"{BotConstants.ERROR} Error guardando la alerta. Intenta de nuevo."
+                )
+            
+            # Limpiar estado
+            self.bot_manager.clear_user_state(user_id)
+            
+        except ValueError:
+            self.bot.reply_to(
+                message,
+                f"{BotConstants.ERROR} Por favor ingresa un número válido mayor a 0.\n"
+                "**Ejemplo:** 50000 (para límite de ${50000:,.2f})"
             )
     
     # ==================== MÉTODOS AUXILIARES ====================
@@ -456,42 +665,12 @@ class MessageHandlers:
         )
         self.bot.reply_to(message, mensaje)
     
-    def _show_income_categories_setup(self, message):
-        """Muestra la configuración de categorías de ingreso"""
-        markup = self.markup_builder.create_categories_setup_markup(
-            "ingreso", 
-            BotConstants.DEFAULT_INCOME_CATEGORIES
-        )
-        mensaje = self.formatter.format_categorias_setup("ingreso")
-        
-        self.bot.send_message(
-            message.chat.id, 
-            mensaje, 
-            reply_markup=markup, 
-            parse_mode="Markdown"
-        )
-    
-    def _show_expense_categories_setup(self, message):
-        """Muestra la configuración de categorías de gasto"""
-        markup = self.markup_builder.create_categories_setup_markup(
-            "gasto", 
-            BotConstants.DEFAULT_EXPENSE_CATEGORIES
-        )
-        mensaje = self.formatter.format_categorias_setup("gasto")
-        
-        self.bot.send_message(
-            message.chat.id, 
-            mensaje, 
-            reply_markup=markup, 
-            parse_mode="Markdown"
-        )
-    
     def _get_movement_emoji(self, tipo: str) -> str:
         """Retorna el emoji correspondiente al tipo de movimiento"""
         emoji_map = {
             "ingreso": BotConstants.INCOME,
             "gasto": BotConstants.EXPENSE,
-            "ahorro": BotConstants.SAVINGS
+            "ahorro": "💳"
         }
         return emoji_map.get(tipo, BotConstants.MONEY)
     
