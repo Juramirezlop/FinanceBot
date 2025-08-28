@@ -561,6 +561,7 @@ class MessageHandlers:
         text = message.text.strip()
         
         try:
+            # Limpiar entrada y validar
             monto_str = text.replace(",", "").replace("$", "").replace("-", "").strip()
             
             if not self.validator.is_valid_amount(monto_str):
@@ -582,22 +583,34 @@ class MessageHandlers:
                 self.bot.reply_to(message, BotConstants.STATUS_MESSAGES["error"])
                 return
             
-            # Guardar deuda
-            if self.db.agregar_deuda(user_id, nombre, monto, tipo):
-                tipo_texto = "Te deben" if tipo == "positiva" else "Tú debes"
-                mensaje = self.formatter.format_debt_success(nombre, monto, tipo_texto)
-                markup = self.markup_builder.create_debt_success_markup()
-                
-                self.bot.send_message(
-                    message.chat.id,
-                    mensaje,
-                    parse_mode="Markdown",
-                    reply_markup=markup
-                )
-            else:
+            # Guardar deuda - EL SISTEMA maneja el signo automáticamente
+            try:
+                if self.db.agregar_deuda(user_id, nombre, monto, tipo):
+                    tipo_texto = "Te deben" if tipo == "positiva" else "Tú debes"
+                    mensaje = (
+                        f"{BotConstants.SUCCESS} **Deuda Registrada**\n\n"
+                        f"💰 **{nombre}** {tipo_texto.lower()}\n"
+                        f"{BotConstants.MONEY} ${monto:,.2f}\n\n"
+                        f"✅ Registrada correctamente"
+                    )
+                    markup = self.markup_builder.create_debt_success_markup()
+                    
+                    self.bot.send_message(
+                        message.chat.id,
+                        mensaje,
+                        parse_mode="Markdown",
+                        reply_markup=markup
+                    )
+                else:
+                    self.bot.reply_to(
+                        message, 
+                        f"{BotConstants.ERROR} Error guardando la deuda. Intenta de nuevo."
+                    )
+            except Exception as e:
+                logger.error(f"Error específico guardando deuda: {e}")
                 self.bot.reply_to(
-                    message, 
-                    f"{BotConstants.ERROR} Error guardando la deuda. Intenta de nuevo."
+                    message,
+                    f"{BotConstants.ERROR} Error en la base de datos. Intenta más tarde."
                 )
             
             # Limpiar estado
