@@ -395,7 +395,7 @@ class CallbackHandlers:
         """Establece el estado del usuario con timestamp"""
         import time
         state['timestamp'] = time.time()
-        self.bot_manager.set_user_state(user_id, state)format_new_category_request(tipo)
+        self.bot_manager.set_user_state(user_id, state)
         self.bot.edit_message_text(
             mensaje,
             call.message.chat.id,
