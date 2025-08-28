@@ -113,9 +113,13 @@ class BotManager:
         self.bot.message_handler(commands=['ayuda', 'help'])(
             self.command_handlers.handle_ayuda
         )
+        self.bot.message_handler(commands=['backup'])(  # NUEVO COMANDO
+            self.command_handlers.handle_backup
+        )
         self.bot.message_handler(commands=['reset'])(
             self.command_handlers.handle_reset
         )
+        
         # Registrar callbacks
         self.bot.callback_query_handler(func=lambda call: True)(
             self.callback_handlers.handle_callback_query
@@ -249,11 +253,12 @@ class BotManager:
         """Configura los comandos del bot en Telegram"""
         commands = [
             BotCommand("start", "Iniciar bot y mostrar menú principal"),
-            BotCommand("balance", "Ver balance actual"),
+            BotCommand("balance", "Ver balance total"),
             BotCommand("gasto", "Registrar gasto rápido"),
             BotCommand("ingreso", "Registrar ingreso rápido"),
             BotCommand("resumen", "Ver resumen del mes"),
             BotCommand("config", "Configuración del bot"),
+            BotCommand("backup", "Generar backup manual"),  # NUEVO COMANDO
             BotCommand("ayuda", "Mostrar ayuda y guía de uso")
         ]
         
