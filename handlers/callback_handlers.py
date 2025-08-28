@@ -94,6 +94,7 @@ class CallbackHandlers:
     def _show_savings_menu(self, call):
         """Muestra el menú de ahorros"""
         mensaje = self.formatter.format_movement_menu("ahorro")
+        markup = self.markup_builder.create_movement_menu_markup("ahorro")format_movement_menu("ahorro")
         markup = self.markup_builder.create_movement_menu_markup("ahorro")
         
         self.bot.edit_message_text(
