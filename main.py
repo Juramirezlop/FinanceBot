@@ -57,6 +57,10 @@ class FinanceBot:
             
             # Inicializar gestor del bot
             self.bot_manager = BotManager(self.config)
+
+            if not self.bot_manager.initialize_bot():
+                logger.error("Error inicializando bot de Telegram")
+                return False
             
             # Inicializar base de datos
             if not self.bot_manager.initialize_database():
@@ -81,6 +85,10 @@ class FinanceBot:
     
     def run(self):
         """Ejecuta el bot principal"""
+        if not self.config.BOT_TOKEN or not self.config.AUTHORIZED_USER_ID:
+            print("Error: BOT_TOKEN y AUTHORIZED_USER_ID deben estar configurados")
+            return False
+
         if not self.initialize():
             return
             
