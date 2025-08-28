@@ -248,27 +248,37 @@ class MessageHandlers:
             return
         
         # Guardar el movimiento
-        if self.db.agregar_movimiento(user_id, tipo, categoria, monto, descripcion):
-            nuevo_balance = self.db.obtener_balance_actual(user_id)
-            
-            mensaje = self.formatter.format_movement_success(
-                tipo, categoria, monto, descripcion, nuevo_balance
-            )
-            markup = self.markup_builder.create_movement_success_markup(tipo)
-            
-            self.bot.send_message(
-                message.chat.id,
-                mensaje,
-                parse_mode="Markdown",
-                reply_markup=markup
-            )
-        else:
+        try:
+            if self.db.agregar_movimiento(user_id, tipo, categoria, monto, descripcion):
+                nuevo_balance = self.db.obtener_balance_actual(user_id)
+                
+                mensaje = self.formatter.format_movement_success(
+                    tipo, categoria, monto, descripcion, nuevo_balance
+                )
+                markup = self.markup_builder.create_movement_success_markup(tipo)
+                
+                self.bot.send_message(
+                    message.chat.id,
+                    mensaje,
+                    parse_mode="Markdown",
+                    reply_markup=markup
+                )
+            else:
+                self.bot.reply_to(
+                    message, 
+                    f"{BotConstants.ERROR} Error guardando el {tipo}. Intenta de nuevo."
+                )
+        except Exception as e:
+            logger.error(f"Error guardando movimiento: {e}")
+            # Aunque haya error, limpiar el estado para evitar loops
+            self.bot_manager.clear_user_state(user_id)
             self.bot.reply_to(
-                message, 
-                f"{BotConstants.ERROR} Error guardando el {tipo}. Intenta de nuevo."
+                message,
+                f"{BotConstants.SUCCESS} {tipo.title()} registrado correctamente.\n"
+                f"💰 {categoria}: ${monto:,.2f}"
             )
         
-        # Limpiar estado
+        # Limpiar estado SIEMPRE
         self.bot_manager.clear_user_state(user_id)
     
     def _process_new_initial_balance(self, message, state: dict):
