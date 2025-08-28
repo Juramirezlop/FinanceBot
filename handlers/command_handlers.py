@@ -128,24 +128,12 @@ class CommandHandlers:
             logger.error(f"Error obteniendo resumen: {e}")
             self.bot.reply_to(message, BotConstants.STATUS_MESSAGES["error"])
     
-    @handle_errors
-    def handle_config(self, message):
-        """Comando /config - Acceso rápido a configuración"""
-        user_id = message.from_user.id
-        
-        if not self.bot_manager.is_authorized(user_id):
-            return
-        
-        try:
-            self._mostrar_menu_configuracion_directo(message)
-            
-        except Exception as e:
-            logger.error(f"Error en comando config: {e}")
-            self.bot.reply_to(message, BotConstants.STATUS_MESSAGES["error"])
+    # ELIMINAR ESTOS MÉTODOS OBSOLETOS:
+    # handle_reset y handle_config ya no existen
     
     @handle_errors
     def handle_ayuda(self, message):
-        """Comando /ayuda - Guía de uso"""
+        """Comando /ayuda - Guía de uso ACTUALIZADA"""
         try:
             mensaje = self.formatter.format_ayuda()
             self.bot.reply_to(message, mensaje, parse_mode="Markdown")
@@ -153,28 +141,6 @@ class CommandHandlers:
         except Exception as e:
             logger.error(f"Error en comando ayuda: {e}")
             self.bot.reply_to(message, BotConstants.STATUS_MESSAGES["error"])
-
-    @handle_errors
-    def handle_reset(self, message):
-        """Comando /reset - Reinicia la configuración (solo para desarrollo)"""
-        user_id = message.from_user.id
-        
-        if not self.bot_manager.is_authorized(user_id):
-            return
-        
-        # Solo para pruebas - elimina la DB y recrea
-        try:
-            import os
-            if os.path.exists("finanzas.db"):
-                os.remove("finanzas.db")
-            
-            # Reinicializar DB
-            self.db.initialize()
-            self.db.crear_usuario(user_id)
-            
-            self.bot.reply_to(message, "🔄 Base de datos reiniciada. Envía /start para reconfigurar.")
-        except Exception as e:
-            self.bot.reply_to(message, f"❌ Error reiniciando: {e}")
     
     @handle_errors
     def handle_backup(self, message):
