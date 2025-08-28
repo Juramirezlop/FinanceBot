@@ -1,5 +1,5 @@
 """
-Handlers de callbacks (botones inline) optimizados
+Handlers de callbacks (botones inline) optimizados con nuevas funcionalidades
 """
 
 import logging
@@ -39,14 +39,16 @@ class CallbackHandlers:
             self.bot.answer_callback_query(call.id)
             
             # Procesar según el tipo de callback
-            if data.startswith("add_cat_"):
-                self._handle_add_category(call, data)
+            if data.startswith("nueva_categoria_"):
+                self._handle_new_category_request(call, data)
             elif data.startswith("select_cat_"):
                 self._handle_select_category(call, data)
             elif data.startswith("suscripcion_"):
                 self._handle_subscription_action(call, data)
-            elif data in ["config_next_gastos", "config_complete"]:
-                self._handle_config_navigation(call, data)
+            elif data.startswith("deuda_"):
+                self._handle_debt_action(call, data)
+            elif data.startswith("alerta_"):
+                self._handle_alert_action(call, data)
             elif data.startswith("menu_"):
                 self._handle_menu_navigation(call, data)
             elif data in ["back_to_menu", "balance_actual", "resumen_mes"]:
@@ -72,272 +74,23 @@ class CallbackHandlers:
             # Limpiar memoria
             gc.collect()
     
-    def _handle_add_category(self, call, data: str):
-        """Maneja la adición de categorías durante la configuración"""
+    def _handle_new_category_request(self, call, data: str):
+        """Maneja la solicitud de crear nueva categoría"""
         user_id = call.from_user.id
-        parts = data.split("_", 3)
+        tipo = data.replace("nueva_categoria_", "")
         
-        if len(parts) < 3:
-            logger.error(f"Formato de callback inválido: {data}")
+        if tipo not in BotConstants.MOVEMENT_TYPES:
+            logger.error(f"Tipo de categoría inválido: {tipo}")
             return
         
-        tipo = parts[2]  # ingreso o gasto
-        
-        if len(parts) > 3 and parts[3] != "custom":
-            # Categoría predefinida
-            categoria = parts[3]
-            if self.db.agregar_categoria(categoria, tipo, user_id):
-                self.bot.answer_callback_query(
-                    call.id, 
-                    f"{BotConstants.SUCCESS} '{categoria}' agregada"
-                )
-            else:
-                self.bot.answer_callback_query(
-                    call.id, 
-                    f"{BotConstants.ERROR} Error agregando categoría"
-                )
-        else:
-            # Categoría personalizada
-            self._set_user_state(user_id, {"step": f"custom_category_{tipo}"})
-            self.bot.edit_message_text(
-                f"Escribe el nombre de la categoría personalizada de {tipo}:",
-                call.message.chat.id,
-                call.message.message_id,
-                parse_mode="Markdown"
-            )
-    
-    def _handle_select_category(self, call, data: str):
-        """Maneja la selección de categoría para movimientos"""
-        user_id = call.from_user.id
-        parts = data.split("_", 3)
-        
-        if len(parts) < 4:
-            logger.error(f"Formato de callback inválido: {data}")
-            return
-        
-        tipo = parts[2]
-        categoria = parts[3]
-        
-        # Guardar estado para pedir monto
-        state = {
-            "step": f"monto_{tipo}",
-            "tipo": tipo,
-            "categoria": categoria,
+        # Establecer estado para nueva categoría
+        self._set_user_state(user_id, {
+            "step": f"nueva_categoria_{tipo}",
             "chat_id": call.message.chat.id,
             "message_id": call.message.message_id
-        }
-        self._set_user_state(user_id, state)
+        })
         
-        # Mostrar solicitud de monto
-        emoji = BotConstants.INCOME if tipo == "ingreso" else BotConstants.EXPENSE if tipo == "gasto" else BotConstants.SAVINGS
-        mensaje = self.formatter.format_amount_request(tipo, categoria, emoji)
-        
-        self.bot.edit_message_text(
-            mensaje,
-            call.message.chat.id,
-            call.message.message_id,
-            parse_mode="Markdown"
-        )
-    
-    def _handle_subscription_action(self, call, data: str):
-        """Maneja las acciones relacionadas con suscripciones"""
-        user_id = call.from_user.id
-        
-        if data == "suscripcion_cat_":
-            # Falta implementar selección de categoría para suscripción
-            self._handle_subscription_category_selection(call, data)
-        elif data.startswith("suscripcion_cat_"):
-            # Selección de categoría para suscripción
-            categoria = data.replace("suscripcion_cat_", "")
-            self._process_subscription_category(call, categoria)
-    
-    def _handle_config_navigation(self, call, data: str):
-        """Maneja la navegación del wizard de configuración"""
-        user_id = call.from_user.id
-        
-        if data == "config_next_gastos":
-            self._show_expense_categories_setup(call)
-        elif data == "config_complete":
-            if self.db.marcar_usuario_configurado(user_id):
-                self.bot.edit_message_text(
-                    f"{BotConstants.SUCCESS} Configuración completada!\n\nYa puedes usar todas las funciones del bot.",
-                    call.message.chat.id,
-                    call.message.message_id,
-                    parse_mode="Markdown"
-                )
-                self._show_main_menu(call)
-            else:
-                self.bot.edit_message_text(
-                    f"{BotConstants.ERROR} Error completando configuración",
-                    call.message.chat.id,
-                    call.message.message_id
-                )
-    
-    def _handle_menu_navigation(self, call, data: str):
-        """Maneja la navegación entre menús"""
-        menu_map = {
-            "menu_ingresos": self._show_income_menu,
-            "menu_gastos": self._show_expense_menu,
-            "menu_ahorros": self._show_savings_menu,
-            "menu_suscripciones": self._show_subscriptions_menu,
-            "menu_recordatorios": self._show_reminders_menu,
-            "menu_historico": self._show_history_menu,
-            "menu_configuracion": self._show_config_menu
-        }
-        
-        handler = menu_map.get(data)
-        if handler:
-            handler(call)
-        else:
-            logger.warning(f"Menú no encontrado: {data}")
-            self._show_main_menu(call)
-    
-    def _handle_main_actions(self, call, data: str):
-        """Maneja las acciones principales del menú"""
-        user_id = call.from_user.id
-        
-        if data == "back_to_menu":
-            self._show_main_menu(call)
-        elif data == "balance_actual":
-            self._show_current_balance(call, user_id)
-        elif data == "resumen_mes":
-            self._show_monthly_summary(call, user_id)
-    
-    def _handle_view_actions(self, call, data: str):
-        """Maneja las acciones de visualización"""
-        user_id = call.from_user.id
-        
-        if data == "ver_suscripciones":
-            self._show_active_subscriptions(call, user_id)
-        elif data == "ver_recordatorios":
-            self._show_active_reminders(call, user_id)
-        elif data.endswith("_mes"):
-            tipo = data.replace("ver_", "").replace("_mes", "")
-            self._show_month_movements(call, user_id, tipo)
-    
-    def _handle_add_actions(self, call, data: str):
-        """Maneja las acciones de agregar elementos"""
-        user_id = call.from_user.id
-        
-        if data == "agregar_ingreso":
-            self._start_add_movement(call, user_id, "ingreso")
-        elif data == "agregar_gasto":
-            self._start_add_movement(call, user_id, "gasto")
-        elif data == "agregar_ahorro":
-            self._start_add_movement(call, user_id, "ahorro")
-        elif data == "agregar_suscripcion":
-            self._start_add_subscription(call, user_id)
-        elif data == "agregar_recordatorio":
-            self._start_add_reminder(call, user_id)
-    
-    # ==================== MÉTODOS DE VISUALIZACIÓN ====================
-    
-    def _show_main_menu(self, call):
-        """Muestra el menú principal"""
-        user_id = call.from_user.id
-        
-        try:
-            balance = self.db.obtener_balance_actual(user_id)
-            resumen = self.db.obtener_resumen_mes(user_id)
-            
-            mensaje = self.formatter.format_menu_principal(balance, resumen)
-            markup = self.markup_builder.create_main_menu_markup()
-            
-            self.bot.edit_message_text(
-                mensaje,
-                call.message.chat.id,
-                call.message.message_id,
-                parse_mode="Markdown",
-                reply_markup=markup
-            )
-            
-        except Exception as e:
-            logger.error(f"Error mostrando menú principal: {e}")
-            self.bot.edit_message_text(
-                BotConstants.STATUS_MESSAGES["error"],
-                call.message.chat.id,
-                call.message.message_id
-            )
-    
-    def _show_current_balance(self, call, user_id: int):
-        """Muestra el balance actual"""
-        try:
-            balance = self.db.obtener_balance_actual(user_id)
-            mensaje = self.formatter.format_balance(balance)
-            markup = self.markup_builder.create_back_to_menu_markup()
-            
-            self.bot.edit_message_text(
-                mensaje,
-                call.message.chat.id,
-                call.message.message_id,
-                parse_mode="Markdown",
-                reply_markup=markup
-            )
-            
-        except Exception as e:
-            logger.error(f"Error mostrando balance: {e}")
-            self.bot.edit_message_text(
-                BotConstants.STATUS_MESSAGES["error"],
-                call.message.chat.id,
-                call.message.message_id
-            )
-    
-    def _show_monthly_summary(self, call, user_id: int):
-        """Muestra el resumen mensual"""
-        try:
-            resumen = self.db.obtener_resumen_mes(user_id)
-            balance_actual = self.db.obtener_balance_actual(user_id)
-            
-            # Obtener resumen del mes anterior para comparación
-            mes_anterior = resumen["mes"] - 1 if resumen["mes"] > 1 else 12
-            año_anterior = resumen["año"] if resumen["mes"] > 1 else resumen["año"] - 1
-            resumen_anterior = self.db.obtener_resumen_mes(user_id, mes_anterior, año_anterior)
-            
-            mensaje = self.formatter.format_resumen_detallado(resumen, balance_actual, resumen_anterior)
-            markup = self.markup_builder.create_summary_menu_markup()
-            
-            self.bot.edit_message_text(
-                mensaje,
-                call.message.chat.id,
-                call.message.message_id,
-                parse_mode="Markdown",
-                reply_markup=markup
-            )
-            
-        except Exception as e:
-            logger.error(f"Error mostrando resumen mensual: {e}")
-            self.bot.edit_message_text(
-                BotConstants.STATUS_MESSAGES["error"],
-                call.message.chat.id,
-                call.message.message_id
-            )
-    
-    def _show_income_menu(self, call):
-        """Muestra el menú de ingresos"""
-        mensaje = self.formatter.format_movement_menu("ingreso")
-        markup = self.markup_builder.create_movement_menu_markup("ingreso")
-        
-        self.bot.edit_message_text(
-            mensaje,
-            call.message.chat.id,
-            call.message.message_id,
-            parse_mode="Markdown",
-            reply_markup=markup
-        )
-    
-    def _show_expense_menu(self, call):
-        """Muestra el menú de gastos"""
-        mensaje = self.formatter.format_movement_menu("gasto")
-        markup = self.markup_builder.create_movement_menu_markup("gasto")
-        
-        self.bot.edit_message_text(
-            mensaje,
-            call.message.chat.id,
-            call.message.message_id,
-            parse_mode="Markdown",
-            reply_markup=markup
-        )
-    
+        # Mostrar solicitud de nombre
     def _show_savings_menu(self, call):
         """Muestra el menú de ahorros"""
         mensaje = self.formatter.format_movement_menu("ahorro")
@@ -404,7 +157,7 @@ class CallbackHandlers:
             )
     
     def _show_config_menu(self, call):
-        """Muestra el menú de configuración"""
+        """Muestra el menú de configuración mejorado"""
         mensaje = self.formatter.format_config_menu()
         markup = self.markup_builder.create_config_menu_markup()
         
@@ -416,63 +169,7 @@ class CallbackHandlers:
             reply_markup=markup
         )
     
-    # ==================== MÉTODOS DE CONFIGURACIÓN ====================
-    
-    def _show_expense_categories_setup(self, call):
-        """Muestra la configuración de categorías de gasto"""
-        markup = self.markup_builder.create_categories_setup_markup(
-            "gasto", 
-            BotConstants.DEFAULT_EXPENSE_CATEGORIES
-        )
-        mensaje = self.formatter.format_categorias_setup("gasto")
-        
-        self.bot.edit_message_text(
-            mensaje,
-            call.message.chat.id,
-            call.message.message_id,
-            parse_mode="Markdown",
-            reply_markup=markup
-        )
-    
-    # ==================== MÉTODOS DE ACCIONES ====================
-    
-    def _start_add_movement(self, call, user_id: int, tipo: str):
-        """Inicia el proceso para agregar un movimiento"""
-        try:
-            # Obtener categorías según el tipo
-            if tipo in ["ingreso", "gasto"]:
-                categorias = self.db.obtener_categorias(tipo, user_id)
-            else:  # ahorro
-                categorias = ["Ahorro Programado", "Inversión", "Emergencia", "Meta Específica"]
-            
-            if not categorias:
-                self.bot.edit_message_text(
-                    f"{BotConstants.ERROR} No tienes categorías de {tipo} configuradas.\n"
-                    "Ve a Configuración para agregar categorías.",
-                    call.message.chat.id,
-                    call.message.message_id,
-                    reply_markup=self.markup_builder.create_back_to_menu_markup()
-                )
-                return
-            
-            # Crear botones de categorías
-            markup = self.markup_builder.create_category_selection_markup(tipo, categorias)
-            mensaje = self.formatter.format_category_selection(tipo)
-            
-            self.bot.edit_message_text(
-                mensaje,
-                call.message.chat.id,
-                call.message.message_id,
-                reply_markup=markup
-            )
-            
-        except Exception as e:
-            logger.error(f"Error iniciando agregar {tipo}: {e}")
-            self.bot.edit_message_text(
-                BotConstants.STATUS_MESSAGES["error"],
-                call.message.chat.id,
-                call.message.message_id
-            )
+    # ==================== SUSCRIPCIONES ====================
     
     def _start_add_subscription(self, call, user_id: int):
         """Inicia el proceso para agregar una suscripción"""
@@ -490,24 +187,8 @@ class CallbackHandlers:
             parse_mode="Markdown"
         )
     
-    def _start_add_reminder(self, call, user_id: int):
-        """Inicia el proceso para agregar un recordatorio"""
-        self._set_user_state(user_id, {
-            "step": "recordatorio_descripcion",
-            "chat_id": call.message.chat.id,
-            "message_id": call.message.message_id
-        })
-        
-        mensaje = self.formatter.format_reminder_description_request()
-        self.bot.edit_message_text(
-            mensaje,
-            call.message.chat.id,
-            call.message.message_id,
-            parse_mode="Markdown"
-        )
-    
     def _show_active_subscriptions(self, call, user_id: int):
-        """Muestra las suscripciones activas del usuario"""
+        """Muestra las suscripciones activas"""
         try:
             suscripciones = self.db.obtener_suscripciones_activas(user_id)
             mensaje = self.formatter.format_active_subscriptions(suscripciones)
@@ -529,11 +210,54 @@ class CallbackHandlers:
                 call.message.message_id
             )
     
+    def _process_subscription_category(self, call, categoria: str):
+        """Procesa la selección de categoría para suscripción"""
+        user_id = call.from_user.id
+        state = self.bot_manager.get_user_state(user_id)
+        
+        if not state or state.get("step") != "suscripcion_categoria":
+            logger.warning(f"Estado inválido para categoría de suscripción: {state}")
+            self._show_main_menu(call)
+            return
+        
+        # Actualizar estado
+        state["categoria"] = categoria
+        state["step"] = "suscripcion_dia"
+        self._set_user_state(user_id, state)
+        
+        mensaje = self.formatter.format_subscription_day_request(state)
+        self.bot.edit_message_text(
+            mensaje,
+            call.message.chat.id,
+            call.message.message_id,
+            parse_mode="Markdown"
+        )
+    
+    # ==================== RECORDATORIOS ====================
+    
+    def _start_add_reminder(self, call, user_id: int):
+        """Inicia el proceso para agregar un recordatorio"""
+        self._set_user_state(user_id, {
+            "step": "recordatorio_descripcion",
+            "chat_id": call.message.chat.id,
+            "message_id": call.message.message_id
+        })
+        
+        mensaje = self.formatter.format_reminder_description_request()
+        self.bot.edit_message_text(
+            mensaje,
+            call.message.chat.id,
+            call.message.message_id,
+            parse_mode="Markdown"
+        )
+    
     def _show_active_reminders(self, call, user_id: int):
-        """Muestra los recordatorios activos del usuario"""
+        """Muestra los recordatorios activos"""
         try:
-            # Implementar cuando se cree el método en DB
-            mensaje = self.formatter.format_active_reminders([])
+            # Por ahora mostramos mensaje básico
+            # En implementación completa se obtendría de la DB
+            recordatorios = []  # self.db.obtener_recordatorios_activos(user_id)
+            mensaje = self.formatter.format_active_reminders(recordatorios)
             markup = self.markup_builder.create_reminders_view_markup()
             
             self.bot.edit_message_text(
@@ -575,66 +299,68 @@ class CallbackHandlers:
                 call.message.message_id
             )
     
-    def _process_subscription_category(self, call, categoria: str):
-        """Procesa la selección de categoría para suscripción"""
-        user_id = call.from_user.id
-        state = self.bot_manager.get_user_state(user_id)
-        
-        if not state or state.get("step") != "suscripcion_categoria":
-            logger.warning(f"Estado inválido para categoría de suscripción: {state}")
-            self._show_main_menu(call)
-            return
-        
-        # Actualizar estado
-        state["categoria"] = categoria
-        state["step"] = "suscripcion_dia"
-        self._set_user_state(user_id, state)
-        
-        mensaje = self.formatter.format_subscription_day_request(state)
-        self.bot.edit_message_text(
-            mensaje,
-            call.message.chat.id,
-            call.message.message_id,
-            parse_mode="Markdown"
-        )
+    # ==================== CONFIGURACIÓN ====================
     
-    def _handle_subscription_category_selection(self, call, data: str):
-        """Maneja cuando se necesita seleccionar categoría para suscripción"""
+    def _handle_config_actions(self, call, data):
+        """Maneja las acciones de configuración mejoradas"""
         user_id = call.from_user.id
-        state = self.bot_manager.get_user_state(user_id)
         
-        if not state or state.get("step") != "suscripcion_monto":
-            logger.warning(f"Estado inválido para selección de categoría: {state}")
-            return
-        
-        # Obtener categorías de gasto
-        categorias = self.db.obtener_categorias("gasto", user_id)
-        
-        if not categorias:
+        if data == "config_balance_inicial":
+            self._set_user_state(user_id, {
+                "step": "config_nuevo_balance",
+                "chat_id": call.message.chat.id,
+                "message_id": call.message.message_id
+            })
+            
             self.bot.edit_message_text(
-                f"{BotConstants.ERROR} No tienes categorías de gasto configuradas.\n"
-                "Ve a Configuración para agregar categorías.",
+                "💰 **Cambiar Balance Inicial**\n\n"
+                "Ingresa el nuevo balance inicial:\n"
+                "**Ejemplo:** 100000 o 0",
                 call.message.chat.id,
                 call.message.message_id,
+                parse_mode="Markdown"
+            )
+            
+        elif data == "config_estadisticas":
+            try:
+                stats = self.db.obtener_estadisticas_db()
+                mensaje = (
+                    "📊 **Estadísticas del Bot**\n\n"
+                    f"👤 Usuarios: {stats.get('usuarios', 0)}\n"
+                    f"💰 Movimientos: {stats.get('movimientos', 0)}\n"
+                    f"🔄 Suscripciones: {stats.get('suscripciones', 0)}\n"
+                    f"🔔 Recordatorios: {stats.get('recordatorios', 0)}\n"
+                    f"💳 Deudas: {stats.get('deudas', 0)}\n"
+                    f"🚨 Alertas: {stats.get('alertas', 0)}\n"
+                    f"📂 Categorías: {stats.get('categorias', 0)}"
+                )
+                
+                self.bot.edit_message_text(
+                    mensaje,
+                    call.message.chat.id,
+                    call.message.message_id,
+                    parse_mode="Markdown",
+                    reply_markup=self.markup_builder.create_back_to_menu_markup()
+                )
+            except Exception as e:
+                logger.error(f"Error obteniendo estadísticas: {e}")
+                self.bot.edit_message_text(
+                    "❌ Error obteniendo estadísticas",
+                    call.message.chat.id,
+                    call.message.message_id,
+                    reply_markup=self.markup_builder.create_back_to_menu_markup()
+                )
+        
+        elif data == "config_exportar":
+            self.bot.edit_message_text(
+                "📄 **Exportar Datos**\n\n"
+                "Los backups automáticos se envían diariamente.\n"
+                "Puedes solicitar un backup manual escribiendo /backup",
+                call.message.chat.id,
+                call.message.message_id,
+                parse_mode="Markdown",
                 reply_markup=self.markup_builder.create_back_to_menu_markup()
             )
-            return
-        
-        # Crear markup para selección de categoría
-        markup = self.markup_builder.create_subscription_category_markup(categorias)
-        mensaje = self.formatter.format_subscription_category_selection(state)
-        
-        # Actualizar estado
-        state["step"] = "suscripcion_categoria"
-        self._set_user_state(user_id, state)
-        
-        self.bot.edit_message_text(
-            mensaje,
-            call.message.chat.id,
-            call.message.message_id,
-            parse_mode="Markdown",
-            reply_markup=markup
-        )
     
     # ==================== MÉTODOS AUXILIARES ====================
     
@@ -669,36 +395,477 @@ class CallbackHandlers:
         """Establece el estado del usuario con timestamp"""
         import time
         state['timestamp'] = time.time()
-        self.bot_manager.set_user_state(user_id, state)
+        self.bot_manager.set_user_state(user_id, state)format_new_category_request(tipo)
+        self.bot.edit_message_text(
+            mensaje,
+            call.message.chat.id,
+            call.message.message_id,
+            parse_mode="Markdown"
+        )
     
-    def _handle_config_actions(self, call, data):
-        """Maneja las acciones de configuración"""
-        if data == "config_categorias":
+    def _handle_select_category(self, call, data: str):
+        """Maneja la selección de categoría para movimientos"""
+        user_id = call.from_user.id
+        parts = data.split("_", 3)
+        
+        if len(parts) < 4:
+            logger.error(f"Formato de callback inválido: {data}")
+            return
+        
+        tipo = parts[2]
+        categoria = parts[3]
+        
+        # Guardar estado para pedir monto
+        state = {
+            "step": f"monto_{tipo}",
+            "tipo": tipo,
+            "categoria": categoria,
+            "chat_id": call.message.chat.id,
+            "message_id": call.message.message_id
+        }
+        self._set_user_state(user_id, state)
+        
+        # Mostrar solicitud de monto
+        emoji = BotConstants.INCOME if tipo == "ingreso" else BotConstants.EXPENSE if tipo == "gasto" else "💳"
+        mensaje = self.formatter.format_amount_request(tipo, categoria, emoji)
+        
+        self.bot.edit_message_text(
+            mensaje,
+            call.message.chat.id,
+            call.message.message_id,
+            parse_mode="Markdown"
+        )
+    
+    def _handle_subscription_action(self, call, data: str):
+        """Maneja las acciones relacionadas con suscripciones"""
+        user_id = call.from_user.id
+        
+        if data.startswith("suscripcion_cat_"):
+            # Selección de categoría para suscripción
+            categoria = data.replace("suscripcion_cat_", "")
+            self._process_subscription_category(call, categoria)
+    
+    def _handle_debt_action(self, call, data: str):
+        """Maneja las acciones relacionadas con deudas"""
+        user_id = call.from_user.id
+        
+        if data.startswith("deuda_tipo_"):
+            tipo = data.replace("deuda_tipo_", "")
+            self._process_debt_type_selection(call, tipo)
+    
+    def _handle_alert_action(self, call, data: str):
+        """Maneja las acciones relacionadas con alertas"""
+        user_id = call.from_user.id
+        
+        if data.startswith("alerta_tipo_"):
+            tipo = data.replace("alerta_tipo_", "")
+            self._process_alert_type_selection(call, tipo)
+    
+    def _handle_menu_navigation(self, call, data: str):
+        """Maneja la navegación entre menús"""
+        menu_map = {
+            "menu_ingresos": self._show_income_menu,
+            "menu_gastos": self._show_expense_menu,
+            "menu_ahorros": self._show_savings_menu,
+            "menu_suscripciones": self._show_subscriptions_menu,
+            "menu_recordatorios": self._show_reminders_menu,
+            "menu_deudas": self._show_debts_menu,
+            "menu_alertas": self._show_alerts_menu,
+            "menu_historico": self._show_history_menu,
+            "menu_configuracion": self._show_config_menu
+        }
+        
+        handler = menu_map.get(data)
+        if handler:
+            handler(call)
+        else:
+            logger.warning(f"Menú no encontrado: {data}")
+            self._show_main_menu(call)
+    
+    def _handle_main_actions(self, call, data: str):
+        """Maneja las acciones principales del menú"""
+        user_id = call.from_user.id
+        
+        if data == "back_to_menu":
+            self._show_main_menu(call)
+        elif data == "balance_actual":
+            self._show_current_balance(call, user_id)
+        elif data == "resumen_mes":
+            self._show_monthly_summary(call, user_id)
+    
+    def _handle_view_actions(self, call, data: str):
+        """Maneja las acciones de visualización"""
+        user_id = call.from_user.id
+        
+        if data == "ver_suscripciones":
+            self._show_active_subscriptions(call, user_id)
+        elif data == "ver_recordatorios":
+            self._show_active_reminders(call, user_id)
+        elif data == "ver_deudas":
+            self._show_active_debts(call, user_id)
+        elif data == "ver_alertas":
+            self._show_active_alerts(call, user_id)
+        elif data.startswith("ver_categorias_"):
+            tipo = data.replace("ver_categorias_", "")
+            self._show_categories_with_totals(call, user_id, tipo)
+        elif data.endswith("_mes"):
+            tipo = data.replace("ver_", "").replace("_mes", "")
+            self._show_month_movements(call, user_id, tipo)
+    
+    def _handle_add_actions(self, call, data: str):
+        """Maneja las acciones de agregar elementos"""
+        user_id = call.from_user.id
+        
+        if data == "agregar_ingreso":
+            self._start_add_movement(call, user_id, "ingreso")
+        elif data == "agregar_gasto":
+            self._start_add_movement(call, user_id, "gasto")
+        elif data == "agregar_ahorro":
+            self._start_add_movement(call, user_id, "ahorro")
+        elif data == "agregar_suscripcion":
+            self._start_add_subscription(call, user_id)
+        elif data == "agregar_recordatorio":
+            self._start_add_reminder(call, user_id)
+        elif data == "agregar_deuda":
+            self._start_add_debt(call, user_id)
+        elif data == "agregar_alerta":
+            self._start_add_alert(call, user_id)
+    
+    # ==================== MÉTODOS DE VISUALIZACIÓN ====================
+    
+    def _show_main_menu(self, call):
+        """Muestra el menú principal con balance diario"""
+        user_id = call.from_user.id
+        
+        try:
+            # Obtener balance diario
+            balance_diario = self.db.obtener_balance_diario(user_id)
+            resumen = self.db.obtener_resumen_mes(user_id)
+            
+            mensaje = self.formatter.format_menu_principal(balance_diario, resumen)
+            markup = self.markup_builder.create_main_menu_markup()
+            
             self.bot.edit_message_text(
-                "⚙️ **Gestión de Categorías**\n\n"
-                "Funcionalidad en desarrollo.\n"
-                "Por ahora puedes agregar categorías durante el registro de movimientos.",
+                mensaje,
                 call.message.chat.id,
                 call.message.message_id,
-                reply_markup=self.markup_builder.create_back_to_menu_markup()
+                parse_mode="Markdown",
+                reply_markup=markup
             )
-        elif data == "config_balance":
+            
+        except Exception as e:
+            logger.error(f"Error mostrando menú principal: {e}")
             self.bot.edit_message_text(
-                "💰 **Cambiar Balance Inicial**\n\n"
-                "Funcionalidad en desarrollo.",
+                BotConstants.STATUS_MESSAGES["error"],
+                call.message.chat.id,
+                call.message.message_id
+            )
+    
+    def _show_current_balance(self, call, user_id: int):
+        """Muestra el balance completo"""
+        try:
+            balance = self.db.obtener_balance_actual(user_id)
+            mensaje = self.formatter.format_balance(balance)
+            markup = self.markup_builder.create_back_to_menu_markup()
+            
+            self.bot.edit_message_text(
+                mensaje,
                 call.message.chat.id,
                 call.message.message_id,
-                reply_markup=self.markup_builder.create_back_to_menu_markup()
+                parse_mode="Markdown",
+                reply_markup=markup
             )
-        elif data == "ver_configuracion":
-            user_id = call.from_user.id
-            balance_inicial = "Configurado"  # Podrías obtener el valor real de la DB
+            
+        except Exception as e:
+            logger.error(f"Error mostrando balance: {e}")
             self.bot.edit_message_text(
-                "📊 **Tu Configuración Actual**\n\n"
-                f"💰 Balance inicial: {balance_inicial}\n"
-                f"👤 Usuario autorizado: {user_id}\n"
-                "📱 Bot configurado correctamente",
+                BotConstants.STATUS_MESSAGES["error"],
+                call.message.chat.id,
+                call.message.message_id
+            )
+    
+    def _show_monthly_summary(self, call, user_id: int):
+        """Muestra el resumen mensual"""
+        try:
+            resumen = self.db.obtener_resumen_mes(user_id)
+            balance_actual = self.db.obtener_balance_actual(user_id)
+            
+            # Obtener resumen del mes anterior para comparación
+            mes_anterior = resumen["mes"] - 1 if resumen["mes"] > 1 else 12
+            año_anterior = resumen["año"] if resumen["mes"] > 1 else resumen["año"] - 1
+            resumen_anterior = self.db.obtener_resumen_mes(user_id, mes_anterior, año_anterior)
+            
+            mensaje = self.formatter.format_resumen_detallado(resumen, balance_actual, resumen_anterior)
+            markup = self.markup_builder.create_summary_menu_markup()
+            
+            self.bot.edit_message_text(
+                mensaje,
                 call.message.chat.id,
                 call.message.message_id,
-                reply_markup=self.markup_builder.create_back_to_menu_markup()
+                parse_mode="Markdown",
+                reply_markup=markup
             )
+            
+        except Exception as e:
+            logger.error(f"Error mostrando resumen mensual: {e}")
+            self.bot.edit_message_text(
+                BotConstants.STATUS_MESSAGES["error"],
+                call.message.chat.id,
+                call.message.message_id
+            )
+    
+    def _show_categories_with_totals(self, call, user_id: int, tipo: str):
+        """Muestra categorías con sus totales acumulados"""
+        try:
+            categorias_con_totales = self.db.obtener_categorias_con_totales(tipo, user_id)
+            mensaje = self.formatter.format_categories_by_type(tipo, categorias_con_totales)
+            markup = self.markup_builder.create_categories_view_markup(tipo)
+            
+            self.bot.edit_message_text(
+                mensaje,
+                call.message.chat.id,
+                call.message.message_id,
+                parse_mode="Markdown",
+                reply_markup=markup
+            )
+            
+        except Exception as e:
+            logger.error(f"Error mostrando categorías: {e}")
+            self.bot.edit_message_text(
+                BotConstants.STATUS_MESSAGES["error"],
+                call.message.chat.id,
+                call.message.message_id
+            )
+    
+    # ==================== NUEVOS MÉTODOS PARA FUNCIONALIDADES ====================
+    
+    def _show_debts_menu(self, call):
+        """Muestra el menú de deudas"""
+        mensaje = self.formatter.format_debts_menu()
+        markup = self.markup_builder.create_debts_menu_markup()
+        
+        self.bot.edit_message_text(
+            mensaje,
+            call.message.chat.id,
+            call.message.message_id,
+            parse_mode="Markdown",
+            reply_markup=markup
+        )
+    
+    def _show_active_debts(self, call, user_id: int):
+        """Muestra las deudas activas"""
+        try:
+            deudas = self.db.obtener_deudas_activas(user_id)
+            mensaje = self.formatter.format_active_debts(deudas)
+            markup = self.markup_builder.create_debts_view_markup()
+            
+            self.bot.edit_message_text(
+                mensaje,
+                call.message.chat.id,
+                call.message.message_id,
+                parse_mode="Markdown",
+                reply_markup=markup
+            )
+            
+        except Exception as e:
+            logger.error(f"Error mostrando deudas: {e}")
+            self.bot.edit_message_text(
+                BotConstants.STATUS_MESSAGES["error"],
+                call.message.chat.id,
+                call.message.message_id
+            )
+    
+    def _show_alerts_menu(self, call):
+        """Muestra el menú de alertas"""
+        mensaje = self.formatter.format_alerts_menu()
+        markup = self.markup_builder.create_alerts_menu_markup()
+        
+        self.bot.edit_message_text(
+            mensaje,
+            call.message.chat.id,
+            call.message.message_id,
+            parse_mode="Markdown",
+            reply_markup=markup
+        )
+    
+    def _show_active_alerts(self, call, user_id: int):
+        """Muestra las alertas activas"""
+        try:
+            alertas = self.db.obtener_alertas_activas(user_id)
+            
+            if not alertas:
+                mensaje = "🚨 **Alertas Activas**\n\n❌ No tienes alertas configuradas"
+            else:
+                mensaje = f"🚨 **Alertas Activas** ({len(alertas)})\n\n"
+                for alerta in alertas:
+                    mensaje += f"• Límite {alerta['tipo']}: ${alerta['limite']:,.2f}\n"
+            
+            markup = self.markup_builder.create_alerts_view_markup()
+            
+            self.bot.edit_message_text(
+                mensaje,
+                call.message.chat.id,
+                call.message.message_id,
+                parse_mode="Markdown",
+                reply_markup=markup
+            )
+            
+        except Exception as e:
+            logger.error(f"Error mostrando alertas: {e}")
+            self.bot.edit_message_text(
+                BotConstants.STATUS_MESSAGES["error"],
+                call.message.chat.id,
+                call.message.message_id
+            )
+    
+    # ==================== MÉTODOS DE INICIO DE PROCESOS ====================
+    
+    def _start_add_movement(self, call, user_id: int, tipo: str):
+        """Inicia el proceso para agregar un movimiento"""
+        try:
+            # Obtener categorías del tipo
+            categorias = self.db.obtener_categorias(tipo, user_id)
+            
+            if not categorias:
+                # Si no hay categorías, crear algunas básicas
+                if tipo == "ingreso":
+                    categorias_basicas = ["Salario", "Freelance", "Otros"]
+                elif tipo == "gasto":
+                    categorias_basicas = ["Comida", "Transporte", "Otros"]
+                else:  # ahorro
+                    categorias_basicas = ["Ahorro General", "Inversión", "Emergencia"]
+                
+                for cat in categorias_basicas:
+                    self.db.agregar_categoria(cat, tipo, user_id)
+                
+                categorias = self.db.obtener_categorias(tipo, user_id)
+            
+            # Crear botones de categorías
+            markup = self.markup_builder.create_category_selection_markup(tipo, categorias)
+            mensaje = self.formatter.format_category_selection(tipo, True)
+            
+            self.bot.edit_message_text(
+                mensaje,
+                call.message.chat.id,
+                call.message.message_id,
+                reply_markup=markup
+            )
+            
+        except Exception as e:
+            logger.error(f"Error iniciando agregar {tipo}: {e}")
+            self.bot.edit_message_text(
+                BotConstants.STATUS_MESSAGES["error"],
+                call.message.chat.id,
+                call.message.message_id
+            )
+    
+    def _start_add_debt(self, call, user_id: int):
+        """Inicia el proceso para agregar una deuda"""
+        self._set_user_state(user_id, {
+            "step": "deuda_nombre",
+            "chat_id": call.message.chat.id,
+            "message_id": call.message.message_id
+        })
+        
+        mensaje = self.formatter.format_debt_name_request()
+        self.bot.edit_message_text(
+            mensaje,
+            call.message.chat.id,
+            call.message.message_id,
+            parse_mode="Markdown"
+        )
+    
+    def _start_add_alert(self, call, user_id: int):
+        """Inicia el proceso para agregar una alerta"""
+        mensaje = self.formatter.format_alert_type_selection()
+        markup = self.markup_builder.create_alert_type_markup()
+        
+        self.bot.edit_message_text(
+            mensaje,
+            call.message.chat.id,
+            call.message.message_id,
+            parse_mode="Markdown",
+            reply_markup=markup
+        )
+    
+    def _process_debt_type_selection(self, call, tipo: str):
+        """Procesa la selección del tipo de deuda"""
+        user_id = call.from_user.id
+        state = self.bot_manager.get_user_state(user_id)
+        
+        if not state or state.get("step") != "deuda_nombre":
+            # Continuar con el flujo normal
+            estado_nuevo = {
+                "step": "deuda_monto",
+                "tipo": tipo,
+                "chat_id": call.message.chat.id,
+                "message_id": call.message.message_id
+            }
+            self._set_user_state(user_id, estado_nuevo)
+        else:
+            # Actualizar estado existente
+            state["tipo"] = tipo
+            state["step"] = "deuda_monto"
+            self._set_user_state(user_id, state)
+        
+        # Mostrar solicitud de monto
+        nombre = state.get("nombre", "") if state else ""
+        mensaje = self.formatter.format_debt_amount_request(nombre)
+        
+        self.bot.edit_message_text(
+            mensaje,
+            call.message.chat.id,
+            call.message.message_id,
+            parse_mode="Markdown"
+        )
+    
+    def _process_alert_type_selection(self, call, tipo: str):
+        """Procesa la selección del tipo de alerta"""
+        user_id = call.from_user.id
+        
+        self._set_user_state(user_id, {
+            "step": "alerta_monto",
+            "tipo": tipo,
+            "chat_id": call.message.chat.id,
+            "message_id": call.message.message_id
+        })
+        
+        mensaje = self.formatter.format_alert_amount_request(tipo)
+        self.bot.edit_message_text(
+            mensaje,
+            call.message.chat.id,
+            call.message.message_id,
+            parse_mode="Markdown"
+        )
+    
+    # ==================== MÉTODOS EXISTENTES ACTUALIZADOS ====================
+    
+    def _show_income_menu(self, call):
+        """Muestra el menú de ingresos"""
+        mensaje = self.formatter.format_movement_menu("ingreso")
+        markup = self.markup_builder.create_movement_menu_markup("ingreso")
+        
+        self.bot.edit_message_text(
+            mensaje,
+            call.message.chat.id,
+            call.message.message_id,
+            parse_mode="Markdown",
+            reply_markup=markup
+        )
+    
+    def _show_expense_menu(self, call):
+        """Muestra el menú de gastos"""
+        mensaje = self.formatter.format_movement_menu("gasto")
+        markup = self.markup_builder.create_movement_menu_markup("gasto")
+        
+        self.bot.edit_message_text(
+            mensaje,
+            call.message.chat.id,
+            call.message.message_id,
+            parse_mode="Markdown",
+            reply_markup=markup
+        )
+    
+    def _show_savings_menu(self, call):
+        """Muestra el menú de ahorros"""
+        mensaje = self.formatter.
